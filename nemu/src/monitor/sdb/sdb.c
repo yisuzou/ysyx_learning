@@ -17,8 +17,14 @@
 #include "utils.h"
 #include <cpu/cpu.h>
 #include <isa.h>
+#include <memory/vaddr.h>
 #include <readline/history.h>
 #include <readline/readline.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 static int is_batch_mode = false;
 
@@ -54,6 +60,77 @@ static int cmd_q(char *args) {
   return -1;
 }
 
+static int cmd_si(char *args) {
+  uint64_t N;
+  char *end;
+  if (args == NULL) {
+    N = 1;
+  } else {
+    long val = strtol(args, &end, 10);
+    if (*end != '\0') {
+      printf("Input is not pure number!\n");
+      return 0;
+    } else if (val <= 0) {
+      printf("This is a invalid number! Postive number is acceptable!\n");
+      return 0;
+    }
+    N = (uint64_t)val;
+  }
+  cpu_exec(N);
+  return 0;
+}
+static int cmd_info(char *args) {
+  char *arg = strtok(NULL, " ");
+  if (arg == NULL) {
+    printf("arg is missing! r for registers, w for watchpoints.\n");
+  } else {
+    if (!strcmp(arg, "r")) {
+      isa_reg_display();
+    } else if (!strcmp(arg, "w")) {
+      return 1; // not edit yet.
+    } else {
+      printf("invalid args!\n");
+    }
+  }
+  return 0;
+}
+
+static int cmd_x(char *args) {
+  char *arg1 = strtok(args, " ");
+  char *arg2 = strtok(NULL, " ");
+  char *end1;
+  char *end2;
+  if (arg1 == NULL) {
+    printf("arg is missing!\n");
+  }
+  uint32_t N = strtol(arg1, &end1, 10);
+  if (*end1 != '\0') {
+    printf("input invalid! check the 1st arg!\n");
+    return 0;
+  }
+  uint32_t vaddr = strtol(arg2, &end2, 16);
+  if (*end2 != '\0') {
+    printf("input invalid! check the 2nd arg!\n");
+    return 0;
+  }
+  if (vaddr < 0x80000000 || vaddr > 0x87ffffff) {
+    printf("this address may out of bound. retry.\n");
+    return 0;
+  }
+  printf("mem: \n");
+  int j = 0;
+  for (uint32_t i = 0; i < N; i++) {
+    printf("addr: 0x%x : 0x%x ,", vaddr + i * 4, vaddr_read(vaddr + i * 4, 4));
+    j = j + 1;
+    if (j == 4) {
+      printf("\n");
+      j = 0;
+    }
+    printf("\n");
+  }
+  return 0;
+}
+
 static int cmd_help(char *args);
 
 static struct {
@@ -64,7 +141,9 @@ static struct {
     {"help", "Display information about all supported commands", cmd_help},
     {"c", "Continue the execution of the program", cmd_c},
     {"q", "Exit NEMU", cmd_q},
-
+    {"si", "Single-step execution", cmd_si},
+    {"info", "Display information about regs or watchpoints", cmd_info},
+    {"x", "Scan memory, useage: x N(bytes) address(0x...)", cmd_x},
     /* TODO: Add more commands */
 
 };
@@ -129,7 +208,7 @@ void sdb_mainloop() {
       if (strcmp(cmd, cmd_table[i].name) == 0) {
         if (cmd_table[i].handler(args) < 0) {
           return;
-        } // 如果输入和命令匹配上了则判断返回值是否是小于0，是则推出当前loop
+        } // 如果输入和命令匹配上了则判断返回值是否是小于0(cmd——quit)，是则推出当前loop,隐含了执行该cmd
         break;
       }
     }

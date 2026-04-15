@@ -85,7 +85,8 @@ static int parse_args(int argc, char *argv[]) {
       sdb_set_batch_mode();
       break;
     case 'p':
-      sscanf(optarg, "%d", &difftest_port);
+      sscanf(optarg, "%d",
+             &difftest_port); // optarg 代表选项参数，p是一个需要参数的选项；
       break;
     case 'l':
       log_file = optarg;
@@ -125,7 +126,7 @@ void init_monitor(int argc, char *argv[]) {
   init_mem();
 
   /* Initialize devices. */
-  IFDEF(CONFIG_DEVICE, init_device());
+  IFDEF(CONFIG_DEVICE, init_device()); // 需要开启
 
   /* Perform ISA dependent initialization. */
   init_isa();

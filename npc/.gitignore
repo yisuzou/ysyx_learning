@@ -6,6 +6,7 @@
 !*.[cSh]
 !*.v
 !*.cc
+!*.nxdc
 !*.cpp
 !.gitignore
 !README.md

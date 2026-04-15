@@ -109,7 +109,8 @@ void assert_fail_msg() {
 
 /* Simulate how the CPU works. */
 void cpu_exec(uint64_t n) {
-  g_print_step = (n < MAX_INST_TO_PRINT); // 默认为false，这里
+  g_print_step =
+      (n < MAX_INST_TO_PRINT); // 默认为false，这里当n比较小的时候应该允许打印；
   switch (nemu_state.state) {
   case NEMU_END:
   case NEMU_ABORT:
