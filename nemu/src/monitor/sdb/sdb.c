@@ -14,12 +14,14 @@
  ***************************************************************************************/
 
 #include "sdb.h"
+#include "common.h"
 #include "utils.h"
 #include <cpu/cpu.h>
 #include <isa.h>
 #include <memory/vaddr.h>
 #include <readline/history.h>
 #include <readline/readline.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -131,6 +133,16 @@ static int cmd_x(char *args) {
   return 0;
 }
 
+static int cmd_p(char *args) {
+  bool ok = true;
+  word_t result = expr(args, &ok);
+  if (ok) {
+    printf("calculate successfully!the answer is :%d.\n", result);
+  } else {
+    printf("Fail to calculate, notice the reason mentioned above!\n");
+  }
+  return 0;
+}
 static int cmd_help(char *args);
 
 static struct {
@@ -144,6 +156,7 @@ static struct {
     {"si", "Single-step execution", cmd_si},
     {"info", "Display information about regs or watchpoints", cmd_info},
     {"x", "Scan memory, useage: x N(bytes) address(0x...)", cmd_x},
+    {"p", "calculate the expressions you given.\n", cmd_p},
     /* TODO: Add more commands */
 
 };
