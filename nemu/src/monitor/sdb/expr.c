@@ -26,6 +26,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#define MAX_TK 512
+
 enum {
   TK_NOTYPE = 256,
   TK_EQ,
@@ -44,13 +46,13 @@ static struct rule {
      * Pay attention to the precedence level of different rules.
      */
 
-    {" +", TK_NOTYPE},  // spaces
-    {"\\+", '+'},       // plus,需要双\，因为\在字符串中本身就有转义符的作用
-    {"==", TK_EQ},      // equal
-    {"\\-", '-'},       // minus
-    {"\\*", '*'},       // multi
-    {"/", '/'},         // div
-    {"[0-9]+", TK_NUM}, // int base10
+    {" +", TK_NOTYPE},    // spaces
+    {"\\+", '+'},         // plus,需要双\，因为\在字符串中本身就有转义符的作用
+    {"==", TK_EQ},        // equal
+    {"\\-", '-'},         // minus
+    {"\\*", '*'},         // multi
+    {"/", '/'},           // div
+    {"[0-9]+u*", TK_NUM}, // int base10
     {"\\(", '('}, //(,),本身在正则表达式中就有组合的含义，所以也需要转义来识别
     {"\\)", ')'},
 
@@ -82,7 +84,7 @@ typedef struct token {
   char str[32];
 } Token;
 
-static Token tokens[32] __attribute__((used)) = {};
+static Token tokens[MAX_TK] __attribute__((used)) = {};
 static int nr_token __attribute__((used)) = 0;
 word_t eval(int p, int q, bool *success);
 
@@ -158,8 +160,8 @@ static bool make_token(char *e) {
         break;
       }
     }
-    if (nr_token >= 32) {
-      printf("too much tokens!more than 32!\n");
+    if (nr_token >= MAX_TK) {
+      printf("too much tokens!more than %d!\n", MAX_TK);
       return false;
     }
     if (i == NR_REGEX) {
@@ -205,7 +207,7 @@ word_t eval(int p, int q, bool *success) {
   }
   */
   word_t op =
-      64; // 选取一个远大于token数的数字用来防御，如果没找到主运算符应该指示；
+      -1; // 选取一个远大于token数的数字用来防御，如果没找到主运算符应该指示；
   if (p > q) {
     printf("bad expression! happened in function eval, p>q!\n");
     *success = false;
@@ -316,7 +318,7 @@ word_t eval(int p, int q, bool *success) {
       return val1 * val2;
     case '/': /* ... */
       if (val2 == 0) {
-        printf("devide 0 error!\n");
+        printf("divide 0 error!\n");
         *success = false;
         return 0;
       } else {

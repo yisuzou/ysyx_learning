@@ -151,6 +151,10 @@ config ITRACE_COND
   string "Only trace instructions when the condition is true"
   default "true"
 
+config EXPR_TEST
+  bool "Enable expr test"
+  default n
+
 
 config DIFFTEST
   depends on TARGET_NATIVE_ELF
