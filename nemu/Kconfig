@@ -155,6 +155,9 @@ config EXPR_TEST
   bool "Enable expr test"
   default n
 
+config WATCHPOINT
+  bool "Enable watchpoint"
+  default n
 
 config DIFFTEST
   depends on TARGET_NATIVE_ELF

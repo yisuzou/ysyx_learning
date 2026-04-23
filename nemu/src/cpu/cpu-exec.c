@@ -13,11 +13,14 @@
  * See the Mulan PSL v2 for more details.
  ***************************************************************************************/
 
+#include "debug.h"
+#include "utils.h"
+#include <common.h>
 #include <cpu/cpu.h>
 #include <cpu/decode.h>
 #include <cpu/difftest.h>
 #include <locale.h>
-
+#include <stdio.h>
 /* The assembly code of instructions executed is only output to the screen
  * when the number of instructions executed is less than this value.
  * This is useful when you use the `si' command.
@@ -29,7 +32,9 @@ CPU_state cpu = {};
 uint64_t g_nr_guest_inst = 0;
 static uint64_t g_timer = 0; // unit: us
 static bool g_print_step = false;
-
+// 函数声明区，需要调用的函数在这里声明~
+bool check_wp();
+// 函数声明完毕
 void device_update();
 
 static void trace_and_difftest(Decode *_this, vaddr_t dnpc) {
@@ -38,10 +43,17 @@ static void trace_and_difftest(Decode *_this, vaddr_t dnpc) {
     log_write("%s\n", _this->logbuf);
   }
 #endif
-  if (g_print_step) {
+  if (g_print_step) { // si 打印单步指令的源代码，需要开启itrace
     IFDEF(CONFIG_ITRACE, puts(_this->logbuf));
   }
   IFDEF(CONFIG_DIFFTEST, difftest_step(_this->pc, dnpc));
+#ifdef CONFIG_WATCHPOINT
+  if (check_wp()) {
+    if (nemu_state.state != NEMU_END) {
+      nemu_state.state = NEMU_STOP;
+    }
+  }
+#endif
 }
 
 static void exec_once(Decode *s, vaddr_t pc) {

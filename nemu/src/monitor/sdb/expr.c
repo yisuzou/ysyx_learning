@@ -17,6 +17,7 @@
 #include <assert.h>
 #include <isa.h>
 
+#include <memory/vaddr.h>
 /* We use the POSIX regex functions to process regular expressions.
  * Type 'man regex' for more information about POSIX regex functions.
  */
@@ -25,16 +26,23 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #define MAX_TK 512
 
 enum {
   TK_NOTYPE = 256,
   TK_EQ,
-  TK_NUM
+  TK_NUM,
 
   /* TODO: Add more token types */
-
+  TK_HEX,
+  TK_REG,
+  TK_NEQ,
+  TK_AND,
+  TK_REGNAME,
+  TK_PTR,
+  // TK_PC
 };
 
 static struct rule {
@@ -46,17 +54,23 @@ static struct rule {
      * Pay attention to the precedence level of different rules.
      */
 
-    {" +", TK_NOTYPE},    // spaces
-    {"\\+", '+'},         // plus,需要双\，因为\在字符串中本身就有转义符的作用
-    {"==", TK_EQ},        // equal
-    {"\\-", '-'},         // minus
-    {"\\*", '*'},         // multi
-    {"/", '/'},           // div
-    {"[0-9]+u*", TK_NUM}, // int base10
+    {" +", TK_NOTYPE}, // spaces
+    {"\\+", '+'},      // plus,需要双\，第一次在正则中转义，第二次为反斜杠转义
+    {"==", TK_EQ},     // equal
+    {"\\-", '-'},      // minus
+    {"\\*", '*'},      // multi
+    {"/", '/'},        // div
+    {"0x[0-9A-Fa-f]+", TK_HEX}, // int base16
+    {"[0-9]+u?", TK_NUM},       // int base10
     {"\\(", '('}, //(,),本身在正则表达式中就有组合的含义，所以也需要转义来识别
     {"\\)", ')'},
-
-};
+    // 新增十六进制数输入，寄存器访问，等于，不等于，逻辑与，解引用
+    {"((\\$0)|ra|sp|gp|tp|t[0-6]|a[0-7]|s([0-9]|1[01])|pc)", TK_REGNAME},
+    //    {"(\\$0)", TK_REGNAME}, // 寄存器名匹配
+    //    {"pc", TK_PC},
+    {"\\$", TK_REG}, // 当作单目运算符
+    {"!=", TK_NEQ},
+    {"&&", TK_AND}};
 
 #define NR_REGEX ARRLEN(rules) // 正则规则的数量；
 
@@ -115,6 +129,8 @@ static bool make_token(char *e) {
         switch (rules[i].token_type) {
         case TK_NOTYPE:
           break;
+        case TK_HEX:
+        case TK_REGNAME:
         case TK_NUM:
           tokens[nr_token].type = rules[i].token_type;
           if (substr_len <= 31) {
@@ -152,6 +168,13 @@ static bool make_token(char *e) {
           tokens[nr_token].type = rules[i].token_type;
           nr_token = nr_token + 1;
           break;
+        case TK_AND:
+        case TK_NEQ:
+        case TK_REG:
+        case TK_EQ:
+          tokens[nr_token].type = rules[i].token_type;
+          nr_token = nr_token + 1;
+          break;
         default:
           // TODO();
           printf("unsupported token!\n");
@@ -174,7 +197,7 @@ static bool make_token(char *e) {
     }
     */
   }
-  printf("There are %d tokens.\n", nr_token);
+  // printf("There are %d tokens.\n", nr_token);
   return true;
 }
 
@@ -186,11 +209,16 @@ word_t expr(char *e, bool *success) {
   // make_token如果失败了则返回false；不会结束程序。
   /* TODO: Insert codes to evaluate the expression. */
   // TODO();
-  else {
-    word_t result = eval(0, nr_token - 1, success);
-    // printf("%d \n", result);
-    return result;
+  for (int i = 0; i < nr_token; i++) {
+    if (tokens[i].type == '*' &&
+        (i == 0 || tokens[i - 1].type == '+' || tokens[i - 1].type == '-' ||
+         tokens[i - 1].type == '*' || tokens[i - 1].type == '/')) {
+      tokens[i].type = TK_PTR;
+    }
   }
+  word_t result = eval(0, nr_token - 1, success);
+  // printf("%d \n", result);
+  return result;
 }
 
 bool check_parentheses(int p, int q, bool *success);
@@ -218,6 +246,10 @@ word_t eval(int p, int q, bool *success) {
      * Return the value of the number.
      */
     word_t a;
+    if (tokens[p].type == TK_HEX) {
+      sscanf(tokens[p].str, "%x", &a);
+      return a;
+    }
     sscanf(tokens[p].str, "%d", &a);
     // printf("number is : %d \n", a);
     return a;
@@ -227,6 +259,35 @@ word_t eval(int p, int q, bool *success) {
      */
     // printf("() processing! \n");
     return eval(p + 1, q - 1, success);
+  } else if (p + 1 == q) {
+    // 处理单目运算符号
+    if (tokens[p].type == TK_PTR) {
+      int vaddr = eval(p + 1, q, success);
+      if (vaddr < 0x80000000 || vaddr > 0x87ffffff) {
+        printf("this address may out of bound. retry.\n");
+        *success = false;
+        return 0;
+      } else {
+        return vaddr_read(vaddr, 4);
+      }
+    }
+    if (tokens[p].type == TK_REG) {
+      if (tokens[p + 1].type != TK_REGNAME) {
+        printf("Bad expression! $[REGNAME] to get the content in regs!\n");
+        *success = false;
+        return 0;
+      } else {
+        // printf("reg name %s\n", tokens[p + 1].str);
+        if (!strcmp("pc", tokens[p + 1].str)) {
+          return cpu.pc;
+        } else {
+          return isa_reg_str2val(tokens[p + 1].str, success);
+        }
+      }
+    }
+    printf("Something get wrong! Check the unary operator!\n");
+    *success = false;
+    return 0;
   } else {
     // 这里应该写出optype的判断代码，上面是处理几个特殊情况；
     // 循环检查type，只看+—*/这些
@@ -237,23 +298,8 @@ word_t eval(int p, int q, bool *success) {
     }
     int validflag = 0;
     int pmflag = 0;
+    int eqaflag = 0; // 等式，非等式，逻辑表达式优先级最高
     for (int i = p; i <= q; i++) {
-      /*
-      switch (tokens[i].type) {
-      case '+':
-      case '-':
-      case '*':
-      case '/':
-      case '(':
-      case ')':
-        nonumexpr[j].type = tokens[i].type;
-        nonumexpr[j].position = i;
-        j++;
-        break;
-      default:
-        break;
-      }
-      */
       // 上面这个循环已经提取出了只含符号的token，接下来循环判断，但是这里有数字的情况下其实也可以判断
       // 维护一个op就可以
       if (tokens[i].type == '(') {
@@ -272,9 +318,16 @@ word_t eval(int p, int q, bool *success) {
       }
       // all the case validflag eq 0 means out of the ();
       if (validflag == 0) {
-        if (tokens[i].type == '+' || tokens[i].type == '-') {
+        if (tokens[i].type == TK_AND || tokens[i].type == TK_EQ ||
+            tokens[i].type == TK_NEQ) {
           op = i;
-          pmflag = 1;
+          eqaflag = 1;
+        }
+        if (eqaflag == 0) {
+          if (tokens[i].type == '+' || tokens[i].type == '-') {
+            op = i;
+            pmflag = 1;
+          }
         }
         if (pmflag == 0) {
           if (tokens[i].type == '*' || tokens[i].type == '/') {
@@ -324,6 +377,12 @@ word_t eval(int p, int q, bool *success) {
       } else {
         return val1 / val2;
       }
+    case TK_AND:
+      return val1 && val2;
+    case TK_NEQ:
+      return val1 != val2;
+    case TK_EQ:
+      return val1 == val2;
     default:
       printf("No op found!\n");
       *success = false;

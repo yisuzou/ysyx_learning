@@ -15,6 +15,7 @@
 
 #include "sdb.h"
 #include "common.h"
+#include "debug.h"
 #include "utils.h"
 #include <cpu/cpu.h>
 #include <isa.h>
@@ -32,7 +33,6 @@ static int is_batch_mode = false;
 
 void init_regex();
 void init_wp_pool();
-
 /* We use the `readline' library to provide more flexibility to read from stdin.
  */
 static char *rl_gets() {
@@ -88,8 +88,20 @@ static int cmd_info(char *args) {
   } else {
     if (!strcmp(arg, "r")) {
       isa_reg_display();
-    } else if (!strcmp(arg, "w")) {
-      return 1; // not edit yet.
+    } else if (!strcmp(arg, "w")) { // 监视点信息查看
+      // 显示wp的所有信息；遍历查找所有所有可能的序号
+      printf("%-5s  %-16s  %-16s\n", "NO", "EXPR", "Value");
+      bool isempty = false;
+      for (int i = 0; i < 32; i++) {
+        WP *p = find_wp(i, &isempty);
+        if (isempty) {
+          printf("No watchpoints in using!\n");
+          return 0;
+        }
+        if (p != NULL) {
+          printf("%-5d  %-16s  %-16u\n", p->NO, p->expr, p->tar_val);
+        }
+      }
     } else {
       printf("invalid args!\n");
     }
@@ -137,9 +149,49 @@ static int cmd_p(char *args) {
   bool ok = true;
   word_t result = expr(args, &ok);
   if (ok) {
-    printf("calculate successfully!the answer is :%d.\n", result);
+    printf("calculate successfully!\nThe answer is :%u.\n", result);
+    printf("Hex is here: 0x%x.\n", result);
   } else {
     printf("Fail to calculate, notice the reason mentioned above!\n");
+  }
+  return 0;
+}
+// 该函数需要将表达式保存，并保存运算结果，用来和后面的新值比较
+static int cmd_w(char *args) {
+  WP *wp = new_wp();
+  strcpy(wp->expr, args);
+  bool ok = true;
+  wp->tar_val = expr(args, &ok);
+  if (ok) {
+    printf("Watchpoint set successfully!\n ");
+    printf("value of wp is : %u . \n", wp->tar_val);
+  } else {
+    printf("Set failed! Retry!\n");
+    // 失败撤回一个监测点
+    free_wp(wp);
+  }
+  return 0;
+}
+// 循环检查head链表，找到序好为N的，free掉；
+static int cmd_d(char *args) {
+  char *end;
+  uint32_t N = strtol(args, &end, 10);
+  if (*end != '\0') {
+    printf("Input invalid! check the arg(must be a num)!\n");
+    return 0;
+  }
+  bool isempty = false;
+  WP *p = find_wp(N, &isempty);
+  if (isempty) {
+    printf("No watchpoint in using!\n");
+    return 0;
+  }
+  if (p == NULL) {
+    printf("No such watchpoint! Retry!\n");
+    return 0;
+  } else {
+    free_wp(p);
+    printf("free wp %d .\n", N);
   }
   return 0;
 }
@@ -157,7 +209,9 @@ static struct {
     {"si", "Single-step execution", cmd_si},
     {"info", "Display information about regs or watchpoints", cmd_info},
     {"x", "Scan memory, useage: x N(bytes) address(0x...)", cmd_x},
-    {"p", "calculate the expressions you given.\n", cmd_p},
+    {"p", "Calculate the expressions you given.", cmd_p},
+    {"w", "Set watchpoints, useage: w EXPR.", cmd_w},
+    {"d", "Delete watchpoints, useage: d N, N is the NO of watchpoints.", cmd_d}
     /* TODO: Add more commands */
 
 };
