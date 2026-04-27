@@ -43,7 +43,7 @@ static char *rl_gets() {
     line_read = NULL;
   }
 
-  line_read = readline("(nemu) ");
+  line_read = readline("(nemu) "); // 使用readline函数来获取命令
 
   if (line_read && *line_read) {
     add_history(line_read);
@@ -134,21 +134,21 @@ static int cmd_x(char *args) {
   printf("mem: \n");
   int j = 0;
   for (uint32_t i = 0; i < N; i++) {
-    printf("addr: 0x%x : 0x%x ,", vaddr + i * 4, vaddr_read(vaddr + i * 4, 4));
+    printf("addr: 0x%x : 0x%x ,\n", vaddr + i * 4,
+           vaddr_read(vaddr + i * 4, 4));
     j = j + 1;
     if (j == 4) {
       printf("\n");
       j = 0;
     }
-    printf("\n");
   }
   return 0;
 }
 
 static int cmd_p(char *args) {
-  bool ok = true;
-  word_t result = expr(args, &ok);
-  if (ok) {
+  bool success = true;
+  word_t result = expr(args, &success);
+  if (success) {
     printf("calculate successfully!\nThe answer is :%u.\n", result);
     printf("Hex is here: 0x%x.\n", result);
   } else {
@@ -249,7 +249,7 @@ void sdb_mainloop() {
     return;
   }
 
-  for (char *str; (str = rl_gets()) != NULL;) {
+  for (char *str; (str = rl_gets()) != NULL;) { // 等待命令输入
     char *str_end = str + strlen(str);
 
     /* extract the first token as the command */
@@ -262,7 +262,7 @@ void sdb_mainloop() {
      * which may need further parsing
      */
     char *args = cmd + strlen(cmd) + 1;
-    if (args >= str_end) {
+    if (args >= str_end) { // 判断是否有参数，没有的话会越过end（多+1）
       args = NULL;
     }
 

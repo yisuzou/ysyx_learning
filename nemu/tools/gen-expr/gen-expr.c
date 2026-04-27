@@ -39,7 +39,8 @@ static int choose(int x) { return rand() % x; }
 
 int gen_num(void) {
   int n = rand() % 1000;
-  int m = snprintf(buf + pos, sizeof(buf) - pos, "%uu", n);
+  int m = snprintf(buf + pos, sizeof(buf) - pos, "%uu",
+                   n); // 返回值是成功写入的字符数,不包含将要添加的\0
   if (m < 0) {
     return 1;
   }
@@ -174,18 +175,22 @@ int main(int argc, char *argv[]) {
       int exstatus = pclose(fp);
       // 读取运算结果，存入result；
       // 关闭一定要记得使用pclose；
-      if (exstatus == -1) {
+      if (exstatus == -1) { // 检查pclose是否正常关闭
         continue;
       }
 
-      if (WIFEXITED(exstatus)) {
-        if (WEXITSTATUS(exstatus) == 0) {
+      if (WIFEXITED(
+              exstatus)) { // 检查子进程是否正常退出，也就是上面求结果的程序
+        if (WEXITSTATUS(exstatus) ==
+            0) { // 检查子进程退出码，也就是正常返回0的时候是对的
           printf("%u %s\n", result, buf);
           break;
         } else {
           continue;
         }
-      } else if (WIFSIGNALED(exstatus)) {
+      } else if (
+          WIFSIGNALED(
+              exstatus)) { // 检查子进程是否因SIG类错误退出，如果是，有非法表达式
         continue;
       }
     }

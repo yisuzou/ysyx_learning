@@ -48,10 +48,8 @@ static void trace_and_difftest(Decode *_this, vaddr_t dnpc) {
   }
   IFDEF(CONFIG_DIFFTEST, difftest_step(_this->pc, dnpc));
 #ifdef CONFIG_WATCHPOINT
-  if (check_wp()) {
-    if (nemu_state.state != NEMU_END) {
-      nemu_state.state = NEMU_STOP;
-    }
+  if (check_wp() && (nemu_state.state != NEMU_END)) {
+    nemu_state.state = NEMU_STOP;
   }
 #endif
 }
@@ -122,7 +120,7 @@ void assert_fail_msg() {
 /* Simulate how the CPU works. */
 void cpu_exec(uint64_t n) {
   g_print_step =
-      (n < MAX_INST_TO_PRINT); // 默认为false，这里当n比较小的时候应该允许打印；
+      (n < MAX_INST_TO_PRINT); // 默认为false，这里当n<10的时候应该允许打印；
   switch (nemu_state.state) {
   case NEMU_END:
   case NEMU_ABORT:

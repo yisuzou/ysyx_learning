@@ -1,5 +1,5 @@
 STUID = ysyx_1231233231
-STUNAME = 王五
+STUNAME = 周易书
 
 # DO NOT modify the following code!!!
 

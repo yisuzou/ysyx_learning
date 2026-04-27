@@ -212,7 +212,9 @@ word_t expr(char *e, bool *success) {
   for (int i = 0; i < nr_token; i++) {
     if (tokens[i].type == '*' &&
         (i == 0 || tokens[i - 1].type == '+' || tokens[i - 1].type == '-' ||
-         tokens[i - 1].type == '*' || tokens[i - 1].type == '/')) {
+         tokens[i - 1].type == '*' ||
+         tokens[i - 1].type ==
+             '/')) { // 其实不太严谨，理论上存在要连续解引用的行为比如*x，x里也是一个地址？**x
       tokens[i].type = TK_PTR;
     }
   }
@@ -249,10 +251,15 @@ word_t eval(int p, int q, bool *success) {
     if (tokens[p].type == TK_HEX) {
       sscanf(tokens[p].str, "%x", &a);
       return a;
+    } else if (tokens[p].type == TK_NUM) {
+      sscanf(tokens[p].str, "%d", &a);
+      return a;
+    } else {
+      *success = false;
+      printf("It seems that not a NUM/HEX type.\n");
+      return 0;
     }
-    sscanf(tokens[p].str, "%d", &a);
     // printf("number is : %d \n", a);
-    return a;
   } else if (check_parentheses(p, q, success) == true) {
     /* The expression is surrounded by a matched pair of parentheses.
      * If that is the case, just throw away the parentheses.
