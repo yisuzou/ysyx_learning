@@ -5,20 +5,20 @@ module top (  //scpu
     output [6:0] hex1,
     output [6:0] pcnt
 );
-  reg [3:0] PC;
-  reg [7:0] GPR[4];
-  wire [7:0] instr;
+  reg  [3:0] PC;
+  reg  [7:0] GPR  [4];
+  wire [7:0] inst;
   rom r1 (
       PC,
-      instr
+      inst
   );  //取指
   //解码
-  wire [1:0] opcode = instr[7:6];
-  wire [1:0] rd = instr[5:4];
-  wire [1:0] rs1 = instr[3:2];
-  wire [1:0] rs2 = instr[1:0];
-  wire [3:0] imm = instr[3:0];
-  wire [3:0] addr_b = instr[5:2];
+  wire [1:0] opcode = inst[7:6];
+  wire [1:0] rd = inst[5:4];
+  wire [1:0] rs1 = inst[3:2];
+  wire [1:0] rs2 = inst[1:0];
+  wire [3:0] imm = inst[3:0];
+  wire [3:0] addr_b = inst[5:2];
 
   //指令实现
   //结果其实早就被计算好，指令控制数据流向；
@@ -72,7 +72,7 @@ endmodule
 
 module rom (
     input  [3:0] addr,
-    output [7:0] instr
+    output [7:0] inst
 );
   //reg [7:0]mem[8:0];
   assign instr = (addr == 4'd0 ) ? 8'b10001010 :
