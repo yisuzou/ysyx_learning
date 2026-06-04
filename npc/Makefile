@@ -7,6 +7,8 @@ NXDC_FILES =constr/top.nxdc
 BUILD_DIR = ./build
 OBJ_DIR = $(BUILD_DIR)/obj_dir
 BIN = $(BUILD_DIR)/$(TOP)
+IMG ?=
+ARGS ?=
 
 default: $(BIN)
 
@@ -44,7 +46,8 @@ lint:
 	$(VERILATOR) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(VSRCS)
 sim: $(BIN)
 	$(call git_commit, "sim RTL") # DO NOT REMOVE THIS LINE!!!
-	$(BIN)
+	@test -n "$(IMG)" || (echo "Usage: make sim IMG=<image> [ARGS=...]" && exit 1)
+	$(BIN) $(IMG) $(ARGS)
 run: sim
 
 clean:

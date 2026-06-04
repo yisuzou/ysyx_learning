@@ -1,88 +1,154 @@
-module top (  //scpu
-    input clk,
-    input rst,
-    output [6:0] hex0,
-    output [6:0] hex1,
-    output [6:0] pcnt
+import "DPI-C" function void npc_ebreak(input int halt_code, input int pc);
+/*
+import "DPI-C" function int pmem_read(input int raddr);
+import "DPI-C" function void pmem_write(
+  input int  waddr,
+  input int  wdata,
+  input byte wmask
 );
-  reg  [3:0] PC;
-  reg  [7:0] GPR  [4];
-  wire [7:0] inst;
-  rom r1 (
-      PC,
-      inst
-  );  //取指
-  //解码
-  wire [1:0] opcode = inst[7:6];
-  wire [1:0] rd = inst[5:4];
-  wire [1:0] rs1 = inst[3:2];
-  wire [1:0] rs2 = inst[1:0];
-  wire [3:0] imm = inst[3:0];
-  wire [3:0] addr_b = inst[5:2];
+*/
+module top (
+    input  clk,
+    input  rst_n,
+    //input [31:0] inst,
+    //input [31:0] mem_rdata, //由于使用了DPI-C机制，通过内部信号访问即可
+    output invalid_inst
+    //output [31:0] pc
+    //output mem_we,
+    //output [31:0] mem_addr,
+    //output [31:0] mem_wdata
+);
+  //IFU start
+  wire [31:0] inst;
+  wire [31:0] pc;
+  assign inst = pmem_read(pc);
+  //IFU end
+  wire [4:0] rs1;
+  wire [4:0] rs2;
+  wire [4:0] rd;
+  wire [31:0] imm;
+  wire [1:0] src_sel;
+  wire [3:0] exu_op;
+  wire pc_we;
+  wire gpr_we;
+  wire is_ebreak;
 
-  //指令实现
-  //结果其实早就被计算好，指令控制数据流向；
-  wire [7:0] alu_result = GPR[rs1] + GPR[rs2];//读寄存器
-  wire [7:0] imm_ext    = {4'b0, imm};
-  // 选择要写回寄存器的数据 (MUX)
-  wire [7:0] write_data = (opcode == 2'b00) ? alu_result : imm_ext;
-  // 寄存器写使能信号 (只有 ADD 和 LI 需要写寄存器)
-  wire reg_write_en = (opcode == 2'b00) || (opcode == 2'b10);
-
-
-
-
-  wire [6:0] hex_0, hex_1;
-  hex2seg h0 (
-      GPR[rs2][3:0],
-      hex_0
+  reg [31:0] mem_rdata;
+  reg mem_wen;
+  reg [1:0] mem_rbhw;
+  reg [1:0] mem_wbhw;
+  reg [31:0] mem_raddr;
+  reg [31:0] mem_waddr;
+  reg [31:0] mem_wdata;
+  reg [7:0] mem_mask;
+  wire isign;
+  wire valid;
+  IDU idu1 (
+      .inst(inst),
+      .rs1(rs1),
+      .rs2(rs2),
+      .rd(rd),
+      .imm(imm),
+      .invalid_inst(invalid_inst),
+      .src_sel(src_sel),
+      .exu_op(exu_op),
+      .pc_we(pc_we),
+      .gpr_we(gpr_we),
+      .mem_we(mem_wen),
+      .mem_rbhw(mem_rbhw),
+      .mem_wbhw(mem_wbhw),
+      .isign(isign),
+      .is_ebreak(is_ebreak),
+      .valid(valid),
+      .gpr_wsel(gpr_wsel)
   );
-  hex2seg h1 (
-      GPR[rs2][7:4],
-      hex_1
+  wire [31:0] exu_result;
+  wire [31:0] Rrs1;
+  wire [31:0] Rrs2;
+  wire [31:0] gpr_a0;
+  EXU exu1 (
+      .rs1(Rrs1),
+      .rs2(Rrs2),
+      .imm(imm),
+      .src_sel(src_sel),
+      .exu_op(exu_op),
+      .result(exu_result)
   );
-  assign hex0 = (opcode == 2'b01) ? hex_0 : 7'b1111111;
-  assign hex1 = (opcode == 2'b01) ? hex_1 : 7'b1111111;
-  //显示程序计数器
-  hex2seg h3 (
-      PC,
-      pcnt
+
+  reg  [31:0] gpr_wdata;  //允许写入的数据包括pc及其运算，运算结果，立即数
+  wire [ 2:0] gpr_wsel;
+  always @(*) begin
+    case (gpr_wsel)
+      3'd0: begin
+        gpr_wdata = exu_result;
+      end
+      3'd1: begin
+        gpr_wdata = pc + 32'h4;
+      end
+      3'd2: begin
+        gpr_wdata = imm;  //lui
+      end
+      3'd3: begin
+        gpr_wdata = pc + imm;  //auipc
+      end
+      3'd4: begin
+        gpr_wdata = mem_rdata;
+      end
+      default: begin
+        gpr_wdata = 32'h0;
+      end
+    endcase
+  end
+  WBU wbu1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .pc_we(pc_we),
+      .pc_wdata(exu_result & (~32'h1)),
+      .gpr_we(gpr_we),
+      .gpr_wdata(gpr_wdata),
+      .rs1(rs1),
+      .rs2(rs2),
+      .rd(rd),
+      .gpr_rdata1(Rrs1),
+      .gpr_rdata2(Rrs2),
+      .gpr_a0(gpr_a0),
+      .pc(pc)
   );
+  //访存单元
+  assign mem_raddr = exu_result;
+  always @(*) begin
+    mem_waddr = exu_result;
+    case (mem_wbhw)
+      2'd1: begin
+        mem_mask = 8'b00000001 << mem_waddr[1:0];
+      end
+      2'd2: begin
+        mem_mask = 8'b00000011 << mem_waddr[1:0];
+      end
+      2'd3: begin
+        mem_mask = 8'b00001111;
+      end
+      default: mem_mask = 8'hf;
+    endcase
+    mem_wdata = Rrs2 << (8 * mem_waddr[1:0]);
+  end
+  LSU lsu1 (
+      .mem_rbhw(mem_rbhw),  //由译码IDU给出
+      .mem_raddr(mem_raddr),  //由EXU给出
+      .valid(valid),  //IDU给出
+      .wen(mem_wen),  //IDU给出
+      .mem_waddr(mem_waddr),  //exu
+      .mem_wdata(mem_wdata),  //wbu
+      .mem_wmask(mem_mask),  //idu
+      .isign(isign),  //idu
+      .mem_rdata_r(mem_rdata)
+  );
+
 
   always @(posedge clk) begin
-    if (!rst) begin
-      PC <= 0;
-      GPR[0] <= 0;
-      GPR[1] <= 0;
-      GPR[2] <= 0;
-      GPR[3] <= 0;
-    end else begin
-      // GPR[rd] <= (opcode == 2'b0) ? (GPR[rs1] + GPR[rs2]) : {4'b0, imm}; BUG
-      if ((opcode == 2'b11) & (GPR[0] != GPR[rs2])) begin
-        PC <= addr_b;
-      end else begin
-        PC <= PC + 1;
-      end
-      if (reg_write_en) begin
-        GPR[rd] <= write_data;
-      end
+    if (is_ebreak) begin
+      npc_ebreak(gpr_a0, pc);
     end
   end
-endmodule
-
-module rom (
-    input  [3:0] addr,
-    output [7:0] inst
-);
-  //reg [7:0]mem[8:0];
-  assign instr = (addr == 4'd0 ) ? 8'b10001010 :
-               (addr == 4'd1 ) ? 8'b10010000 :
-               (addr == 4'd2 ) ? 8'b10100000 :
-               (addr == 4'd3 ) ? 8'b10110001 :
-               (addr == 4'd4 ) ? 8'b00010111 :
-               (addr == 4'd5 ) ? 8'b00101001 :
-               (addr == 4'd6 ) ? 8'b11010001 :
-               (addr == 4'd7 ) ? 8'b01000010 :
-               (addr == 4'd8 ) ? 8'b11011111 : 8'b11100011;
 
 endmodule
