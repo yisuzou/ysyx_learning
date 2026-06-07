@@ -2,12 +2,15 @@ include $(AM_HOME)/scripts/isa/riscv.mk
 include $(AM_HOME)/scripts/platform/nemu.mk
 
 export PATH := $(PATH):$(abspath $(AM_HOME)/tools/minirv)
+export SHELL := /bin/bash
+MINIRV_GCC_INC := $(shell riscv64-linux-gnu-gcc -print-file-name=include)
 CC = minirv-gcc
 AS = minirv-gcc
 CXX = minirv-g++
 
 CFLAGS  += -DISA_H=\"riscv/riscv.h\"
 COMMON_CFLAGS += -march=rv32i_zicsr -mabi=ilp32  # overwrite
+COMMON_CFLAGS += -ffreestanding -nostdinc -isystem $(MINIRV_GCC_INC) -D_LIBC_LIMITS_H_
 LDFLAGS       += -melf32lriscv                   # overwrite
 
 AM_SRCS += riscv/nemu/start.S \

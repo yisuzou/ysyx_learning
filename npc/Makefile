@@ -1,5 +1,6 @@
 # Makefile
 VERILATOR = verilator
+unexport VERILATOR_ROOT
 TOP ?= top
 TESTBENCH ?= main
 NXDC_FILES =constr/top.nxdc
