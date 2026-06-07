@@ -151,6 +151,18 @@ config ITRACE_COND
   string "Only trace instructions when the condition is true"
   default "true"
 
+config DTRACE
+  depends on TRACE && DEVICE
+  bool "Enable device tracer"
+  default n
+
+config DTRACE_COND
+  depends on DTRACE
+  string "Only trace device accesses when the condition is true"
+  default "true" #更改条件，将ture替换为对应的表达式
+  help
+    The expression can use map, addr, offset, len, data and is_write.
+
 config EXPR_TEST
   bool "Enable expr test"
   default n
