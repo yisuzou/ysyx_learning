@@ -78,6 +78,8 @@ int vsprintf(char *out, const char *fmt, va_list ap) {
         dst += format_str(dst, va_arg(ap, char *));
       } else if (*src == 'd') {
         dst += format_int(dst, va_arg(ap, int));
+      } else if (*src == 'c') {
+        *dst++ = (char)va_arg(ap, int);
       } else if (*src == '%') { // %% → 输出字面量 '%'
         *dst++ = '%';
       }
