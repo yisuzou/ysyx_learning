@@ -8,6 +8,7 @@ import "DPI-C" function void pmem_write(
 //完整传入，依据不同指令设置不同mask
 //完整读出，外部依据不同指令的控制信号控制写入寄存器的内容
 module LSU (
+    input clk,
     input [1:0] mem_rbhw,
     input [31:0] mem_raddr,
     input valid,
@@ -22,12 +23,12 @@ module LSU (
   reg [ 7:0] mem_byte_rdata;
   reg [15:0] mem_half_rdata;
   always @(*) begin
+    mem_rdata = 32'b0;
     mem_byte_rdata = 8'b0;
     mem_half_rdata = 16'b0;
     if (valid) begin  // 有读写请求时
-      mem_rdata = pmem_read(mem_raddr);
-      if (wen) begin  // 有写请求时
-        pmem_write(mem_waddr, mem_wdata, mem_wmask);
+      if (mem_rbhw != 2'b00) begin
+        mem_rdata = pmem_read(mem_raddr);
       end
       case (mem_rbhw)
         2'b01: begin
@@ -53,6 +54,12 @@ module LSU (
       endcase
     end else begin
       mem_rdata_r = 0;
+    end
+  end
+
+  always @(posedge clk) begin
+    if (valid && wen) begin
+      pmem_write(mem_waddr, mem_wdata, mem_wmask);
     end
   end
 endmodule

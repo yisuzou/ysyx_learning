@@ -19,9 +19,15 @@ module top (
     //output [31:0] mem_wdata
 );
   //IFU start
-  wire [31:0] inst;
+  reg [31:0] inst;
   wire [31:0] pc;
-  assign inst = pmem_read(pc);
+  always @(*) begin
+    if (rst_n) begin
+      inst = pmem_read(pc);
+    end else begin
+      inst = 32'h00000013;
+    end
+  end
   //IFU end
   wire [4:0] rs1;
   wire [4:0] rs2;
@@ -133,6 +139,7 @@ module top (
     mem_wdata = Rrs2 << (8 * mem_waddr[1:0]);
   end
   LSU lsu1 (
+      .clk(clk),
       .mem_rbhw(mem_rbhw),  //由译码IDU给出
       .mem_raddr(mem_raddr),  //由EXU给出
       .valid(valid),  //IDU给出

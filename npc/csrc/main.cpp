@@ -5,25 +5,47 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/time.h>
 #include <verilated.h>
+#if VM_TRACE_FST
 #include <verilated_fst_c.h>
+#endif
 
 static TOP_NAME dut;
+#if VM_TRACE_FST
 static VerilatedFstC *tfp = nullptr;
+static bool trace_opened = false;
+#endif
 static vluint64_t sim_time = 0;
 static volatile sig_atomic_t sim_running = 1;
-static bool trace_opened = false;
 
 static constexpr uint32_t RESET_VECTOR = 0x80000000;
 static constexpr uint32_t PMEM_SIZE = 128 * 1024 * 1024;
-static constexpr uint32_t MAX_CYCLES = 9000000;
+// static constexpr uint32_t MAX_CYCLES = 9000000;
+
+static constexpr uint32_t SER_ADDR = 0x10000000;
+static constexpr uint32_t RTC_ADDR = 0x10000048;
 
 static uint8_t pmem[PMEM_SIZE] = {};
 
 static int halt_code = -1;
 static uint32_t halt_cycle = 0;
 
+static uint64_t boot_time = 0;
+
+static uint64_t get_elapsed_us() {
+  struct timeval now;
+  gettimeofday(&now, NULL);
+  uint64_t us = static_cast<uint64_t>(now.tv_sec) * 1000000 + now.tv_usec;
+  if (boot_time == 0)
+    boot_time = us;
+  return us - boot_time;
+}
+
 static void close_trace() {
+#if VM_TRACE_FST
   if (tfp != nullptr) {
     if (trace_opened) {
       tfp->close();
@@ -34,6 +56,7 @@ static void close_trace() {
   } else {
     trace_opened = false;
   }
+#endif
 }
 
 static void request_exit(int) { sim_running = 0; }
@@ -48,13 +71,8 @@ extern "C" void npc_ebreak(int code, int pc) {
   sim_running = 0;
 }
 // extern "C" int pmem_read(int raddr);
-static uint32_t normalize_paddr(uint32_t addr) {
-  return (addr >= RESET_VECTOR) ? (addr - RESET_VECTOR) : addr;
-}
-
 static bool check_pmem_range(uint32_t addr, uint32_t len) {
-  uint32_t offset = normalize_paddr(addr);
-  if (offset > PMEM_SIZE || len > PMEM_SIZE - offset) {
+  if (addr < RESET_VECTOR || addr - RESET_VECTOR > PMEM_SIZE - len) {
     std::fprintf(stderr, "pmem out of range: addr = 0x%08x, len = %u\n", addr,
                  len);
     sim_running = 0;
@@ -91,51 +109,66 @@ static bool load_img(const char *img_file) {
   return true;
 }
 
-// 将risc-v地址转化到数组地址
+// 将risc-v地址转化为数组地址
 extern "C" int
-pmem_read(uint32_t addr) { // 总是读取地址为`raddr & ~0x3u`的4字节返回
-  uint32_t offset = normalize_paddr(addr);
-  offset = offset & (~0x3u);
-  if (!check_pmem_range(offset + RESET_VECTOR, 4)) {
+pmem_read(uint32_t addr) { // 总是读取地址为`addr & ~0x3u`的4字节返回
+  if (addr == RTC_ADDR || addr == RTC_ADDR + 4) {
+    uint64_t us = get_elapsed_us();
+    if (addr == RTC_ADDR)
+      return static_cast<uint32_t>(us);
+    else
+      return static_cast<uint32_t>(us >> 32);
+  }
+  uint32_t aligned = addr & (~0x3u);
+  if (!check_pmem_range(aligned, 4)) {
     return 0;
   }
-  return static_cast<uint32_t>(pmem[offset]) |
-         (static_cast<uint32_t>(pmem[offset + 1]) << 8) |
-         (static_cast<uint32_t>(pmem[offset + 2]) << 16) |
-         (static_cast<uint32_t>(pmem[offset + 3]) << 24);
+  uint32_t idx = aligned - RESET_VECTOR;
+  return static_cast<uint32_t>(pmem[idx]) |
+         (static_cast<uint32_t>(pmem[idx + 1]) << 8) |
+         (static_cast<uint32_t>(pmem[idx + 2]) << 16) |
+         (static_cast<uint32_t>(pmem[idx + 3]) << 24);
 }
 extern "C" void pmem_write(int waddr, int wdata, char wmask) {
   // 总是往地址为`waddr & ~0x3u`的4字节按写掩码`wmask`写入`wdata`
   // `wmask`中每比特表示`wdata`中1个字节的掩码,
   // 如`wmask = 0x3`代表只写入最低2个字节, 内存中的其它字节保持不变
-  uint32_t offset = normalize_paddr(waddr);
-  offset = offset & (~0x3u);
-  if (!check_pmem_range(offset + RESET_VECTOR, 4)) {
-    return;
-  }
-  if (wmask == 0x1) {
-    pmem[offset] = static_cast<uint8_t>(wdata & 0xff);
-  } else if (wmask == 0x2) {
-    pmem[offset + 1] = static_cast<uint8_t>((wdata >> 8) & 0xff);
-  } else if (wmask == 0x4) {
-    pmem[offset + 2] = static_cast<uint8_t>((wdata >> 16) & 0xff);
-  } else if (wmask == 0x8) {
-    pmem[offset + 3] = static_cast<uint8_t>((wdata >> 24) & 0xff);
-  } else if (wmask == 0x3) {
-    pmem[offset] = static_cast<uint8_t>(wdata & 0xff);
-    pmem[offset + 1] = static_cast<uint8_t>((wdata >> 8) & 0xff);
-  } else if (wmask == 0xc) {
-    pmem[offset + 2] = static_cast<uint8_t>((wdata >> 16) & 0xff);
-    pmem[offset + 3] = static_cast<uint8_t>((wdata >> 24) & 0xff);
-  } else if (wmask == 0xf) {
-    pmem[offset] = static_cast<uint8_t>(wdata & 0xff);
-    pmem[offset + 1] = static_cast<uint8_t>((wdata >> 8) & 0xff);
-    pmem[offset + 2] = static_cast<uint8_t>((wdata >> 16) & 0xff);
-    pmem[offset + 3] = static_cast<uint8_t>((wdata >> 24) & 0xff);
-  } else {
-    std::fprintf(stderr, "error in wmask: 0x%x\n", wmask);
 
-    sim_running = 0;
+  if (waddr == SER_ADDR) {
+    // 串口，输出单个字符，只有低8位是有效数据；
+    uint8_t ch = wdata & 0xff;
+    putc(ch, stderr);
+    return;
+  } else {
+    uint32_t aligned = waddr & (~0x3u);
+    if (!check_pmem_range(aligned, 4)) {
+      return;
+    }
+    uint32_t idx = aligned - RESET_VECTOR;
+    if (wmask == 0x1) {
+      pmem[idx] = static_cast<uint8_t>(wdata & 0xff);
+    } else if (wmask == 0x2) {
+      pmem[idx + 1] = static_cast<uint8_t>((wdata >> 8) & 0xff);
+    } else if (wmask == 0x4) {
+      pmem[idx + 2] = static_cast<uint8_t>((wdata >> 16) & 0xff);
+    } else if (wmask == 0x8) {
+      pmem[idx + 3] = static_cast<uint8_t>((wdata >> 24) & 0xff);
+    } else if (wmask == 0x3) {
+      pmem[idx] = static_cast<uint8_t>(wdata & 0xff);
+      pmem[idx + 1] = static_cast<uint8_t>((wdata >> 8) & 0xff);
+    } else if (wmask == 0xc) {
+      pmem[idx + 2] = static_cast<uint8_t>((wdata >> 16) & 0xff);
+      pmem[idx + 3] = static_cast<uint8_t>((wdata >> 24) & 0xff);
+    } else if (wmask == 0xf) {
+      pmem[idx] = static_cast<uint8_t>(wdata & 0xff);
+      pmem[idx + 1] = static_cast<uint8_t>((wdata >> 8) & 0xff);
+      pmem[idx + 2] = static_cast<uint8_t>((wdata >> 16) & 0xff);
+      pmem[idx + 3] = static_cast<uint8_t>((wdata >> 24) & 0xff);
+    } else {
+      std::fprintf(stderr, "error in wmask: 0x%x\n", wmask);
+
+      sim_running = 0;
+    }
   }
 }
 static void eval_once() { // 实现DPI-C之前，由这里加载指令
@@ -152,11 +185,19 @@ static void eval_once() { // 实现DPI-C之前，由这里加载指令
 static void single_cycle() {
   dut.clk = 0;
   eval_once();
+#if VM_TRACE_FST
   tfp->dump(sim_time++);
+#else
+  sim_time++;
+#endif
 
   dut.clk = 1;
   eval_once();
+#if VM_TRACE_FST
   tfp->dump(sim_time++);
+#else
+  sim_time++;
+#endif
 }
 
 void reset(int n) {
@@ -191,16 +232,17 @@ int main(int argc, char **argv) {
   std::signal(SIGQUIT, request_exit);
 
   Verilated::traceEverOn(true);
+#if VM_TRACE_FST
   tfp = new VerilatedFstC;
   dut.trace(tfp, 99);
   tfp->open("build/wave.fst");
   trace_opened = true;
+#endif
 
   reset(10);
 
   uint32_t cycle = 0;
-  for (; sim_running && !Verilated::gotFinish() && cycle < MAX_CYCLES;
-       cycle++) {
+  for (; sim_running && !Verilated::gotFinish(); cycle++) {
     single_cycle();
   }
   halt_cycle = cycle;
