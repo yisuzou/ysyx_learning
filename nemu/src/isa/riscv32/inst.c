@@ -14,6 +14,9 @@
  ***************************************************************************************/
 
 #include "common.h"
+#ifdef CONFIG_FTRACE
+#include "ftrace.h"
+#endif
 #include "local-include/reg.h"
 #include "macro.h"
 #include <cpu/cpu.h>
@@ -24,7 +27,9 @@
 #define R(i) gpr(i)
 #define Mr vaddr_read
 #define Mw vaddr_write
-
+#ifdef CONFIG_FTRACE
+static int num_of_call = 0; // ftrace 调用深度，用于打印调用链缩进
+#endif
 enum {
   TYPE_I,
   TYPE_U,
@@ -141,13 +146,13 @@ static int decode_exec(Decode *s) {
           R(rd) = src1 & src2);
   INSTPAT("0000001 ????? ????? 100 ????? 01100 11", div, R,
           R(rd) = (src1 == 0x80000000 && src2 == -1) ? (sword_t)src1
-                  : (src2 == 0)                      ? 0xffffffff
+                  : (src2 == 0) ? 0xffffffff
                                 : (sword_t)src1 / (sword_t)src2);
   INSTPAT("0000001 ????? ????? 101 ????? 01100 11", divu, R,
           R(rd) = (src2 == 0) ? 0xffffffff : src1 / src2);
   INSTPAT("0000001 ????? ????? 110 ????? 01100 11", rem, R,
           R(rd) = (src1 == 0x80000000 && src2 == -1) ? 0
-                  : (src2 == 0)                      ? (sword_t)src1
+                  : (src2 == 0) ? (sword_t)src1
                                 : (sword_t)src1 % (sword_t)src2);
   // risc-v定义了除0和边界行为，把对一些不合理的操作的结果固定下来，避免UB
   INSTPAT("0000001 ????? ????? 111 ????? 01100 11", remu, R,
@@ -232,7 +237,30 @@ static int decode_exec(Decode *s) {
   INSTPAT_END();
 
   R(0) = 0; // reset $zero to 0
-
+#ifdef CONFIG_FTRACE
+  // 通过 call 和 ret 的识别来实现调用链的打印。
+  if (s->isa.inst == 0x00008067) { // ret
+    if (ftrace_find_func(s->pc)) {
+      num_of_call--;
+      printf("0x%x: ", s->pc);
+      for (int i = 0; i < num_of_call; i++) {
+        printf("  ");
+      }
+      printf(" ret [%s]\n", ftrace_find_func(s->pc));
+    }
+  } else if (((s->isa.inst & 0x00000fff) == 0x000000ef) ||
+             ((s->isa.inst & 0x00000fff) ==
+              0x000000e7)) { // jal rd=x1 || jalr rd =x1
+    if (ftrace_find_func(s->dnpc)) {
+      printf("0x%x: ", s->pc);
+      for (int i = 0; i < num_of_call; i++) {
+        printf("  ");
+      }
+      printf(" call [%s@0x%x]\n", ftrace_find_func(s->dnpc), s->dnpc);
+      num_of_call++;
+    }
+  }
+#endif
   return 0;
 }
 

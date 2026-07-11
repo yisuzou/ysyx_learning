@@ -27,17 +27,52 @@
  * You can modify this value as you want.
  */
 #define MAX_INST_TO_PRINT 10
-
+#define MAX_INST_IN_RINGBUF 16
 CPU_state cpu = {};
 uint64_t g_nr_guest_inst = 0;
 static uint64_t g_timer = 0; // unit: us
 static bool g_print_step = false;
+
+#ifdef CONFIG_ITRACE
+static char iringbuf[MAX_INST_IN_RINGBUF][sizeof(((Decode *)0)->logbuf)];
+static int iringbuf_next = 0;
+static int iringbuf_count = 0;
+
+static void iringbuf_record(const char *logbuf) {
+  snprintf(iringbuf[iringbuf_next], sizeof(iringbuf[iringbuf_next]), "%s",
+           logbuf);
+  iringbuf_next = (iringbuf_next + 1) % MAX_INST_IN_RINGBUF;
+  if (iringbuf_count < MAX_INST_IN_RINGBUF) {
+    iringbuf_count++; // 维护有效记录数
+  }
+}
+
+static void iringbuf_display() {
+  if (iringbuf_count == 0) {
+    return;
+  }
+
+  printf("Recent instruction trace:\n");
+  int start = (iringbuf_next - iringbuf_count + MAX_INST_IN_RINGBUF) %
+              MAX_INST_IN_RINGBUF;
+  int current = (iringbuf_next - 1 + MAX_INST_IN_RINGBUF) % MAX_INST_IN_RINGBUF;
+
+  for (int i = 0; i < iringbuf_count; i++) {
+    int idx = (start + i) % MAX_INST_IN_RINGBUF;
+    printf("%s%s\n", idx == current ? "--> " : "    ", iringbuf[idx]);
+  }
+}
+#endif
+
 // 函数声明区，需要调用的函数在这里声明~
 bool check_wp();
 // 函数声明完毕
 void device_update();
 
 static void trace_and_difftest(Decode *_this, vaddr_t dnpc) {
+#ifdef CONFIG_ITRACE
+  iringbuf_record(_this->logbuf);
+#endif
 #ifdef CONFIG_ITRACE_COND
   if (ITRACE_COND) {
     log_write("%s\n", _this->logbuf);
@@ -61,7 +96,8 @@ static void exec_once(Decode *s, vaddr_t pc) {
   cpu.pc = s->dnpc;
 #ifdef CONFIG_ITRACE
   char *p = s->logbuf;
-  p += snprintf(p, sizeof(s->logbuf), FMT_WORD ":", s->pc);
+  p += snprintf(p, sizeof(s->logbuf), FMT_WORD ":",
+                s->pc); // 打印结构化部分，pc ：
   int ilen = s->snpc - s->pc;
   int i;
   uint8_t *inst = (uint8_t *)&s->isa.inst;
@@ -70,7 +106,7 @@ static void exec_once(Decode *s, vaddr_t pc) {
 #else
   for (i = ilen - 1; i >= 0; i--) {
 #endif
-    p += snprintf(p, 4, " %02x", inst[i]);
+    p += snprintf(p, 4, " %02x", inst[i]); // 打印指令部分
   }
   int ilen_max = MUXDEF(CONFIG_ISA_x86, 8, 4);
   int space_len = ilen_max - ilen;
@@ -113,6 +149,9 @@ static void statistic() {
 }
 
 void assert_fail_msg() {
+#ifdef CONFIG_ITRACE
+  iringbuf_display();
+#endif
   isa_reg_display();
   statistic();
 }
@@ -153,6 +192,11 @@ void cpu_exec(uint64_t n) {
                     ? ANSI_FMT("HIT GOOD TRAP", ANSI_FG_GREEN)
                     : ANSI_FMT("HIT BAD TRAP", ANSI_FG_RED))),
         nemu_state.halt_pc);
+#ifdef CONFIG_ITRACE
+    if (nemu_state.state == NEMU_ABORT || nemu_state.halt_ret != 0) {
+      iringbuf_display();
+    }
+#endif
     // fall through
   case NEMU_QUIT:
     statistic();

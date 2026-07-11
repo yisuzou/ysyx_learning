@@ -32,7 +32,9 @@ void init_alarm();
 
 void send_key(uint8_t, bool);
 void vga_update_screen();
-
+__attribute__((weak)) void nemu_autoplay_update(void) {
+  //默认什么都不做
+}
 void device_update() {
   static uint64_t last = 0;
   uint64_t now = get_time();
@@ -59,10 +61,13 @@ void device_update() {
         send_key(k, is_keydown);
         break;
       }
+      //这里是SDL键盘处理，如果有按键输入，就出发send_key函数，传入按键的scancode和按键状态（按下或抬起）。
 #endif
       default: break;
     }
   }
+  //考虑到我们的外挂程序也要向键盘缓冲区写入数据，所以在这里完成调用；为了不影响原程序逻辑，所以要在这里设定一个弱函数，默认什么都不做；
+  nemu_autoplay_update();
 #endif
 }
 

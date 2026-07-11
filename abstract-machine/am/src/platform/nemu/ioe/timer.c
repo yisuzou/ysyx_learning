@@ -7,9 +7,9 @@ void __am_timer_init() {}
 void __am_timer_uptime(AM_TIMER_UPTIME_T *uptime) {
   // nemu作为模拟器，本身已经实现了时钟和相关设备，am
   // 要做的只是去访问相关地址就可以！
-  uint64_t us0 = (uint64_t)inl(RTC_ADDR);
-  uint64_t us1 = (uint64_t)inl(RTC_ADDR + 4) << 32;
 
+  uint64_t us1 = (uint64_t)inl(RTC_ADDR + 4) << 32;
+  uint64_t us0 = (uint64_t)inl(RTC_ADDR);
   uptime->us = us1 | us0;
 }
 
