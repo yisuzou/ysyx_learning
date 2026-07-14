@@ -5,7 +5,7 @@ module WBU (
     input rst_n,  //低有效复位信号
     input pc_we,  //pc写使能，沿用了logisim设计思路
     input [31:0] pc_wdata,
-    //pc输出二选一，顺序自家和跳转输入；
+    //pc输出二选一，顺序自加和跳转输入；
     input gpr_we,
     input [31:0] gpr_wdata,
     input [4:0] rs1,
@@ -31,7 +31,7 @@ module WBU (
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      pc <= 32'h80000000; //先复位到0，后续学习一下nemu的内存分配方式，偏移到80，主要现在的测试程序也没按照那种地址来，偏移量计算不符合要求
+      pc <= 32'h80000000;
     end else begin
       if (pc_we) begin
         pc <= pc_wdata;

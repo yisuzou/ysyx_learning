@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdint.h>
+#include <algorithm>
 #include <stdio.h>
 #include <sys/time.h>
 #include <verilated.h>
@@ -14,13 +15,14 @@
 #endif
 
 static TOP_NAME dut;
+static uint32_t cpu_gpr[32] = {};
 #if VM_TRACE_FST
 static VerilatedFstC *tfp = nullptr;
 static bool trace_opened = false;
 #endif
 static vluint64_t sim_time = 0;
 static volatile sig_atomic_t sim_running = 1;
-
+static int debug_mode = 0;
 static constexpr uint32_t RESET_VECTOR = 0x80000000;
 static constexpr uint32_t PMEM_SIZE = 128 * 1024 * 1024;
 // static constexpr uint32_t MAX_CYCLES = 9000000;
@@ -58,10 +60,35 @@ static void close_trace() {
   }
 #endif
 }
-
+void sdb_mainloop();
+bool check_watchpoints();
 static void request_exit(int) { sim_running = 0; }
 
+extern "C" bool npc_simulation_active() {
+  return sim_running && !Verilated::gotFinish();
+}
+
+extern "C" void npc_notify_execution_finished() {
+  std::printf("npc: program execution has ended; "
+              "please exit and reload the image to run again\n");
+}
+
 extern "C" int pmem_read(uint32_t addr);
+
+extern "C" void npc_reg_write(int index, int data) {
+  if (index > 0 && index < 32) {
+    cpu_gpr[index] = static_cast<uint32_t>(data);
+  }
+}
+
+extern "C" uint32_t npc_reg_read(int index) {
+  if (index < 0 || index >= 32) {
+    return 0;
+  }
+  return index == 0 ? 0 : cpu_gpr[index];
+}
+
+extern "C" uint32_t npc_get_pc() { return dut.debug_pc; }
 
 extern "C" void npc_ebreak(int code, int pc) {
   uint32_t prev_inst = pmem_read(pc - 4);
@@ -72,12 +99,23 @@ extern "C" void npc_ebreak(int code, int pc) {
 }
 // extern "C" int pmem_read(int raddr);
 static bool check_pmem_range(uint32_t addr, uint32_t len) {
-  if (addr < RESET_VECTOR || addr - RESET_VECTOR > PMEM_SIZE - len) {
+  if (len > PMEM_SIZE || addr < RESET_VECTOR ||
+      addr - RESET_VECTOR > PMEM_SIZE - len) {
     std::fprintf(stderr, "pmem out of range: addr = 0x%08x, len = %u\n", addr,
                  len);
     sim_running = 0;
     return false;
   }
+
+  return true;
+}
+
+extern "C" bool npc_mem_read(uint32_t addr, uint32_t *value) {
+  uint32_t aligned = addr & ~0x3u;
+  if (aligned < RESET_VECTOR || aligned - RESET_VECTOR > PMEM_SIZE - 4) {
+    return false;
+  }
+  *value = static_cast<uint32_t>(pmem_read(addr));
   return true;
 }
 
@@ -118,7 +156,7 @@ pmem_read(uint32_t addr) { // 总是读取地址为`addr & ~0x3u`的4字节返�
       return static_cast<uint32_t>(us);
     else
       return static_cast<uint32_t>(us >> 32);
-  }
+  } // 模拟RTC寄存器，返回自仿真开始以来的微秒数，低32位在RTC_ADDR，高32位在RTC_ADDR+4
   uint32_t aligned = addr & (~0x3u);
   if (!check_pmem_range(aligned, 4)) {
     return 0;
@@ -181,7 +219,7 @@ static void eval_once() { // 实现DPI-C之前，由这里加载指令
     }
     */
 }
-
+// 仿真的单步执行
 static void single_cycle() {
   dut.clk = 0;
   eval_once();
@@ -201,19 +239,49 @@ static void single_cycle() {
 }
 
 void reset(int n) {
+  std::fill(cpu_gpr, cpu_gpr + 32, 0);
   dut.rst_n = 0;
   while (n-- > 0)
     single_cycle();
   dut.rst_n = 1;
 }
 
-int main(int argc, char **argv) {
-  Verilated::commandArgs(argc, argv);
+int parse_args(int argc, char **argv) {
   if (argc < 2) {
     std::fprintf(stderr, "usage: %s <image>\n", argv[0]);
     return 1;
   }
   if (!load_img(argv[1])) {
+    return 1;
+  }
+  if (argv[2] == nullptr) {
+    std::printf("npc: \033[1;33mRUNNING_MODE\033[0m\n");
+    return 0;
+  } // 上面说明没有额外参数，直接返回0
+  else if (strcmp(argv[2], "-d") == 0) {
+    std::printf("npc: \033[1;33mDEBUG_MODE\033[0m\n");
+    debug_mode = 1;
+  } else {
+    std::fprintf(stderr, "unknown option: %s\n", argv[2]);
+    return 1;
+  }
+  return 0;
+}
+
+uint64_t cpu_exec(uint64_t n) {
+  uint64_t i = 0;
+  for (; i < n && sim_running && !Verilated::gotFinish(); i++) {
+    single_cycle();
+    if (check_watchpoints()) {
+      break;
+    }
+  }
+  return i;
+}
+
+int main(int argc, char **argv) {
+  Verilated::commandArgs(argc, argv);
+  if (parse_args(argc, argv) != 0) {
     return 1;
   }
   // mem.bin ebrak;
@@ -240,10 +308,12 @@ int main(int argc, char **argv) {
 #endif
 
   reset(10);
-
-  uint32_t cycle = 0;
-  for (; sim_running && !Verilated::gotFinish(); cycle++) {
-    single_cycle();
+  uint64_t cycle = 0;
+  if (!debug_mode) {
+    cycle = cpu_exec(-1);
+  } else {
+    sdb_mainloop();
+    cycle = sim_time / 2;
   }
   halt_cycle = cycle;
 

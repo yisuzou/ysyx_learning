@@ -31,7 +31,7 @@ INCFLAGS = $(addprefix -I, $(INC_PATH))
 CXXFLAGS += $(INCFLAGS) -DTOP_NAME="\"V$(TOP)\""
 LINT_FLAGS ?= -Wall
 TRACE_FLAGS ?=
-
+LDFLAGS += -lreadline
 $(BIN): $(VSRCS) $(CSRCS) $(NVBOARD_ARCHIVE)
 	@rm -rf $(OBJ_DIR)
 	$(VERILATOR) $(VERILATOR_CFLAGS) --cc \
