@@ -1,5 +1,6 @@
 # Makefile
 VERILATOR = verilator
+unexport VERILATOR_ROOT
 TOP ?= top
 TESTBENCH ?= main
 NXDC_FILES =constr/top.nxdc
@@ -7,6 +8,8 @@ NXDC_FILES =constr/top.nxdc
 BUILD_DIR = ./build
 OBJ_DIR = $(BUILD_DIR)/obj_dir
 BIN = $(BUILD_DIR)/$(TOP)
+IMG ?=
+ARGS ?=
 
 default: $(BIN)
 
@@ -27,8 +30,8 @@ include $(NVBOARD_HOME)/scripts/nvboard.mk
 INCFLAGS = $(addprefix -I, $(INC_PATH))
 CXXFLAGS += $(INCFLAGS) -DTOP_NAME="\"V$(TOP)\""
 LINT_FLAGS ?= -Wall
-TRACE_FLAGS ?= --trace-fst
-
+TRACE_FLAGS ?=
+LDFLAGS += -lreadline
 $(BIN): $(VSRCS) $(CSRCS) $(NVBOARD_ARCHIVE)
 	@rm -rf $(OBJ_DIR)
 	$(VERILATOR) $(VERILATOR_CFLAGS) --cc \
@@ -44,7 +47,8 @@ lint:
 	$(VERILATOR) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(VSRCS)
 sim: $(BIN)
 	$(call git_commit, "sim RTL") # DO NOT REMOVE THIS LINE!!!
-	$(BIN)
+	@test -n "$(IMG)" || (echo "Usage: make sim IMG=<image> [ARGS=...]" && exit 1)
+	$(BIN) $(IMG) $(ARGS)
 run: sim
 
 clean:

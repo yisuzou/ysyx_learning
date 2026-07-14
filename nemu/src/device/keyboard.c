@@ -14,6 +14,7 @@
 ***************************************************************************************/
 
 #include <device/map.h>
+#include <stdint.h>
 #include <utils.h>
 
 #define KEYDOWN_MASK 0x8000

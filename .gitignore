@@ -8,8 +8,11 @@
 !/npc/*
 !Makefile
 !README.md
+!/.github/
+!/.github/copilot-instructions.md
+AGENTS.md
 !.gitignore
 !init.sh
 /fceux-am
-/am-kernels
 /nvboard
+/am-kernels

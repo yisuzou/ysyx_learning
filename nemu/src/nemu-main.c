@@ -45,7 +45,7 @@ int main(int argc, char *argv[]) {
   engine_start();
   return is_exit_status_bad();
 }
-
+// 表达式求值测试函数，返回0表示全部通过，返回1表示有不通过的
 int run_expr_test(const char *path) {
   FILE *fp = fopen(path, "r");
   if (!fp) {
@@ -59,7 +59,7 @@ int run_expr_test(const char *path) {
   while (fgets(line, sizeof(line), fp)) { // fgets可以读取1行内容
 
     char *p = line;
-    /* 似乎没有需要需要如此处理得，没有空行和注释
+    /* 似乎没有需要需要如此处理的情况，没有空行和注释
     while (isspace((unsigned char)*p)) p++;
     if (*p == '\0' || *p == '#') continue;
      */
