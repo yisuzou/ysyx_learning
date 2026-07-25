@@ -1,36 +1,34 @@
 import "DPI-C" function void npc_ebreak(input int halt_code, input int pc);
 import "DPI-C" function void npc_reg_write(input int index, input int data);
-/*
 import "DPI-C" function int pmem_read(input int raddr);
 import "DPI-C" function void pmem_write(
   input int  waddr,
   input int  wdata,
   input byte wmask
 );
-*/
 module top (
     input  clk,
     input  rst_n,
     //input [31:0] inst,
     //input [31:0] mem_rdata, //由于使用了DPI-C机制，通过内部信号访问即可
     output invalid_inst,
-    output [31:0] debug_pc
+    output [31:0] debug_pc,
+    output [31:0] debug_inst
     //output [31:0] pc
     //output mem_we,
     //output [31:0] mem_addr,
     //output [31:0] mem_wdata
 );
   //IFU start
-  reg [31:0] inst;
+  wire [31:0] inst;
   wire [31:0] pc;
-  assign debug_pc = pc;
-  always @(*) begin
-    if (rst_n) begin
-      inst = pmem_read(pc);
-    end else begin
-      inst = 32'h00000013;
-    end
-  end
+  IFU ifu1 (
+      .rst_n(rst_n),
+      .pc(pc),
+      .inst(inst),
+      .debug_pc(debug_pc),
+      .debug_inst(debug_inst)
+  );
   //IFU end
   wire [4:0] rs1;
   wire [4:0] rs2;
@@ -143,6 +141,7 @@ module top (
   end
   LSU lsu1 (
       .clk(clk),
+      .rst_n(rst_n),
       .mem_rbhw(mem_rbhw),  //由译码IDU给出
       .mem_raddr(mem_raddr),  //由EXU给出
       .valid(valid),  //IDU给出
@@ -159,7 +158,7 @@ module top (
     if (rst_n && gpr_we) begin
       npc_reg_write({27'b0, rd}, gpr_wdata);
     end
-    if (is_ebreak) begin
+    if (rst_n && is_ebreak) begin
       npc_ebreak(gpr_a0, pc);
     end
   end

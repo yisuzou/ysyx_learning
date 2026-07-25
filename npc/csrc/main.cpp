@@ -1,4 +1,5 @@
 #include <Vtop.h>
+#include <algorithm>
 #include <cerrno>
 #include <csignal>
 #include <cstdint>
@@ -6,7 +7,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdint.h>
-#include <algorithm>
 #include <stdio.h>
 #include <sys/time.h>
 #include <verilated.h>
@@ -89,6 +89,7 @@ extern "C" uint32_t npc_reg_read(int index) {
 }
 
 extern "C" uint32_t npc_get_pc() { return dut.debug_pc; }
+extern "C" uint32_t npc_get_inst() { return dut.debug_inst; }
 
 extern "C" void npc_ebreak(int code, int pc) {
   uint32_t prev_inst = pmem_read(pc - 4);
@@ -272,6 +273,19 @@ uint64_t cpu_exec(uint64_t n) {
   uint64_t i = 0;
   for (; i < n && sim_running && !Verilated::gotFinish(); i++) {
     single_cycle();
+#ifdef NPC_ITRACE
+    if (n < 10) {
+      std::printf("npc: \033[1;33mitrace:\033[0m 0x%x", npc_get_pc());
+      uint8_t inst_bytes[4];
+      inst_bytes[0] = static_cast<uint8_t>(npc_get_inst() & 0xff);
+      inst_bytes[1] = static_cast<uint8_t>((npc_get_inst() >> 8) & 0xff);
+      inst_bytes[2] = static_cast<uint8_t>((npc_get_inst() >> 16) & 0xff);
+      inst_bytes[3] = static_cast<uint8_t>((npc_get_inst() >> 24) & 0xff);
+      std::printf("   %02x %02x %02x %02x \n", inst_bytes[3], inst_bytes[2],
+                  inst_bytes[1], inst_bytes[0]);
+    }
+#endif
+
     if (check_watchpoints()) {
       break;
     }

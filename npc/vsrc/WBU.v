@@ -19,6 +19,7 @@ module WBU (
 
   GPR gpr1 (
       .clk(clk),
+      .rst_n(rst_n),
       .wdata(gpr_wdata),
       .waddr(rd),
       .wen(gpr_we),
@@ -43,4 +44,3 @@ module WBU (
 
 
 endmodule
-

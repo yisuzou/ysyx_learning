@@ -121,28 +121,6 @@ static bool is_unary_context(int index) {
          previous == TK_NEQ || previous == TK_AND;
 }
 
-static bool register_value(const char *name, word_t *value) {
-  static const char *names[] = {
-      "$0", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0",
-      "a1", "a2", "a3", "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5",
-      "s6", "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"};
-  const char *normalized = name;
-  if (name[0] == '$' && name[1] != '\0' && name[1] != '0') {
-    normalized = name + 1;
-  }
-  if (!std::strcmp(normalized, "pc")) {
-    *value = npc_get_pc();
-    return true;
-  }
-  for (int i = 0; i < 32; i++) {
-    if (!std::strcmp(normalized, names[i])) {
-      *value = npc_reg_read(i);
-      return true;
-    }
-  }
-  return false;
-}
-
 static bool surrounded_by_parentheses(int left, int right) {
   if (tokens[left].type != '(' || tokens[right].type != ')') {
     return false;
@@ -203,7 +181,7 @@ static word_t eval(int left, int right, bool *success) {
       return value;
     }
     if (tokens[left].type == TK_REGNAME &&
-        register_value(tokens[left].str, &value)) {
+        npc_reg_str2val(tokens[left].str, &value)) {
       return value;
     }
     *success = false;
@@ -229,7 +207,7 @@ static word_t eval(int left, int right, bool *success) {
   if (tokens[left].type == TK_REG) {
     word_t value = 0;
     if (left + 1 != right || tokens[left + 1].type != TK_REGNAME ||
-        !register_value(tokens[left + 1].str, &value)) {
+        !npc_reg_str2val(tokens[left + 1].str, &value)) {
       *success = false;
       std::printf("invalid register expression\n");
       return 0;
