@@ -1,5 +1,7 @@
 #include "sdb.h"
 
+#include <isa.h>
+#include <memory/paddr.h>
 #include <regex.h>
 
 #include <cstdio>
@@ -180,9 +182,12 @@ static word_t eval(int left, int right, bool *success) {
       }
       return value;
     }
-    if (tokens[left].type == TK_REGNAME &&
-        npc_reg_str2val(tokens[left].str, &value)) {
-      return value;
+    if (tokens[left].type == TK_REGNAME) {
+      bool ok = true;
+      value = isa_reg_str2val(tokens[left].str, &ok);
+      if (ok) {
+        return value;
+      }
     }
     *success = false;
     std::printf("expected a number or register, got '%s'\n",
@@ -197,17 +202,19 @@ static word_t eval(int left, int right, bool *success) {
     if (tokens[left].type == TK_NEG) {
       return 0 - address;
     }
-    word_t value = 0;
-    if (!npc_mem_read(address, &value)) {
+    if (!in_pmem(address) || address - CONFIG_MBASE > CONFIG_MSIZE - 4) {
       *success = false;
       return 0;
     }
-    return value;
+    return paddr_read(address, 4);
   }
   if (tokens[left].type == TK_REG) {
-    word_t value = 0;
-    if (left + 1 != right || tokens[left + 1].type != TK_REGNAME ||
-        !npc_reg_str2val(tokens[left + 1].str, &value)) {
+    bool ok = true;
+    word_t value =
+        left + 1 == right && tokens[left + 1].type == TK_REGNAME
+            ? isa_reg_str2val(tokens[left + 1].str, &ok)
+            : 0;
+    if (left + 1 != right || tokens[left + 1].type != TK_REGNAME || !ok) {
       *success = false;
       std::printf("invalid register expression\n");
       return 0;

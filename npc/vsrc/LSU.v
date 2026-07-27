@@ -1,6 +1,7 @@
 //依据总线设计规范，不论是存还是取，都应该一次性传入/读出32位数据
 //完整传入，依据不同指令设置不同mask
 //完整读出，外部依据不同指令的控制信号控制写入寄存器的内容
+import "DPI-C" function int pmem_read(input int raddr);
 module LSU (
     input clk,
     input rst_n,
@@ -17,14 +18,18 @@ module LSU (
   reg [31:0] mem_rdata;
   reg [ 7:0] mem_byte_rdata;
   reg [15:0] mem_half_rdata;
+  always @(negedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      mem_rdata <= 32'b0;
+    end else if (valid && mem_rbhw != 2'b00) begin
+      mem_rdata <= pmem_read(mem_raddr);
+    end
+  end
+
   always @(*) begin
-    mem_rdata = 32'b0;
     mem_byte_rdata = 8'b0;
     mem_half_rdata = 16'b0;
     if (rst_n && valid) begin  // 有读写请求时
-      if (mem_rbhw != 2'b00) begin
-        mem_rdata = pmem_read(mem_raddr);
-      end
       case (mem_rbhw)
         2'b01: begin
           case (mem_raddr[1:0])

@@ -1,0 +1,98 @@
+mainmenu "NPC Configuration Menu"
+
+menu "ISA"
+
+config ISA
+  string
+  default "minirv"
+
+endmenu
+
+menu "Memory"
+
+config MBASE
+  hex "Physical memory base"
+  default 0x80000000
+
+config MSIZE
+  hex "Physical memory size"
+  default 0x8000000
+
+endmenu
+
+menu "Testing and Debugging"
+
+config TRACE
+  bool "Enable tracers"
+  default y
+
+config ITRACE
+  depends on TRACE
+  bool "Enable instruction tracer"
+  default y
+
+config FTRACE
+  depends on TRACE
+  bool "Enable function tracer"
+  default n
+
+config MTRACE
+  depends on TRACE
+  bool "Enable physical memory tracer"
+  default n
+
+config DTRACE
+  depends on TRACE && DEVICE
+  bool "Enable device tracer"
+  default n
+
+config WATCHPOINT
+  bool "Enable watchpoint checking"
+  default y
+
+config DIFFTEST
+  bool "Enable differential testing"
+  default n
+
+config DIFFTEST_REF_PATH
+  depends on DIFFTEST
+  string "Reference shared object"
+  default "../nemu/build/riscv32-nemu-interpreter-so"
+
+config DIFFTEST_PORT
+  depends on DIFFTEST
+  int "Reference port"
+  range 1 65535
+  default 1234
+
+config WAVE_TRACE
+  bool "Enable FST waveform tracing"
+  default n
+
+endmenu
+
+menuconfig DEVICE
+  bool "Devices"
+  default y
+
+if DEVICE
+
+config HAS_SERIAL
+  bool "Enable serial"
+  default y
+
+config SERIAL_MMIO
+  depends on HAS_SERIAL
+  hex "Serial MMIO address"
+  default 0x10000000
+
+config HAS_TIMER
+  bool "Enable timer"
+  default y
+
+config RTC_MMIO
+  depends on HAS_TIMER
+  hex "RTC MMIO address"
+  default 0x10000048
+
+endif

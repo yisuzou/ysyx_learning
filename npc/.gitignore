@@ -2,6 +2,7 @@
 *
 !*/
 !Makefile
+!Kconfig
 !*.mk
 !*.[cSh]
 !*.v
@@ -10,4 +11,10 @@
 !*.cpp
 !.gitignore
 !README.md
+!configs/
+!configs/*
 build/
+.config
+.config.old
+include/config/
+include/generated/

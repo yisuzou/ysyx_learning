@@ -64,9 +64,7 @@ static void iringbuf_display() {
 }
 #endif
 
-// 函数声明区，需要调用的函数在这里声明~
-bool check_wp();
-// 函数声明完毕
+bool check_wp(); // 检查是否命中watchpoint
 void device_update();
 
 static void trace_and_difftest(Decode *_this, vaddr_t dnpc) {

@@ -1,6 +1,5 @@
 import "DPI-C" function void npc_ebreak(input int halt_code, input int pc);
 import "DPI-C" function void npc_reg_write(input int index, input int data);
-import "DPI-C" function int pmem_read(input int raddr);
 import "DPI-C" function void pmem_write(
   input int  waddr,
   input int  wdata,

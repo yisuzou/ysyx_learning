@@ -1,17 +1,17 @@
 #include "sdb.h"
 
+#include <cpu/cpu.h>
+#include <isa.h>
+#include <memory/paddr.h>
 #include <readline/history.h>
 #include <readline/readline.h>
+#include <utils.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
-#define ARRLEN(arr) (int)(sizeof(arr) / sizeof(arr[0]))
-
-uint64_t cpu_exec(uint64_t n);
-extern "C" bool npc_simulation_active();
-extern "C" void npc_notify_execution_finished();
+static bool is_batch_mode = false;
 
 static char *rl_gets() {
   static char *line_read = nullptr;
@@ -28,13 +28,15 @@ static char *rl_gets() {
 
 static int cmd_c(char *args) {
   cpu_exec(UINT64_MAX);
-  if (!npc_simulation_active()) {
-    npc_notify_execution_finished();
-  }
   return 0;
 }
 
-static int cmd_q(char *args) { return -1; }
+static int cmd_q(char *args) {
+  if (npc_state.state != NPC_END && npc_state.state != NPC_ABORT) {
+    npc_state.state = NPC_QUIT;
+  }
+  return -1;
+}
 
 static int cmd_si(char *args) {
   uint64_t count = 1;
@@ -48,9 +50,6 @@ static int cmd_si(char *args) {
     count = static_cast<uint64_t>(value);
   }
   cpu_exec(count);
-  if (!npc_simulation_active()) {
-    npc_notify_execution_finished();
-  }
   return 0;
 }
 
@@ -105,11 +104,7 @@ static int cmd_info(char *args) {
     return 0;
   }
   if (std::strcmp(arg, "r") == 0) {
-    for (int i = 0; i < 32; i++) {
-      std::printf("%-4s: 0x%08x%s", npc_reg_name(i), npc_reg_read(i),
-                  (i % 4 == 3) ? "\n" : "  ");
-    }
-    std::printf("pc  : 0x%08x\n", npc_get_pc());
+    isa_reg_display();
     return 0;
   }
   if (std::strcmp(arg, "w") == 0) {
@@ -159,12 +154,12 @@ static int cmd_x(char *args) {
     return 0;
   }
   for (unsigned long i = 0; i < count; i++) {
-    uint32_t value = 0;
     uint32_t current = address + static_cast<uint32_t>(i * 4);
-    if (!npc_mem_read(current, &value)) {
+    if (!in_pmem(current) || current - CONFIG_MBASE > CONFIG_MSIZE - 4) {
       std::printf("memory scan stopped at 0x%08x\n", current);
       return 0;
     }
+    uint32_t value = paddr_read(current, 4);
     std::printf("0x%08x: 0x%08x%s", current, value,
                 (i % 4 == 3) ? "\n" : "  ");
   }
@@ -244,8 +239,13 @@ void init_sdb() {
   init_wp_pool();
 }
 
+void sdb_set_batch_mode() { is_batch_mode = true; }
+
 void sdb_mainloop() {
-  init_sdb();
+  if (is_batch_mode) {
+    cmd_c(nullptr);
+    return;
+  }
   for (char *str; (str = rl_gets()) != nullptr;) {
     char *str_end = str + std::strlen(str);
     char *cmd = std::strtok(str, " \t");

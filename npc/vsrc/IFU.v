@@ -1,3 +1,4 @@
+import "DPI-C" function int pmem_ifetch(input int raddr);
 module IFU (
     input rst_n,
     input [31:0] pc,
@@ -10,7 +11,7 @@ module IFU (
   assign debug_inst = inst;
   always @(*) begin
     if (rst_n) begin
-      inst = pmem_read(pc);
+      inst = pmem_ifetch(pc);
     end else begin
       inst = 32'h00000013;
     end

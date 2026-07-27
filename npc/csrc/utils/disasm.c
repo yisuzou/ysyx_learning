@@ -19,21 +19,25 @@ static csh handle;
 void init_disasm() {
   void *dl_handle;
   dl_handle =
-      dlopen("csrc/trace/capstone/repo/libcapstone." CS_LIB_SUFFIX, RTLD_LAZY);
+      dlopen("csrc/tools/capstone/repo/libcapstone." CS_LIB_SUFFIX, RTLD_LAZY);
   assert(dl_handle);
 
-  cs_err (*cs_open_dl)(cs_arch arch, cs_mode mode, csh *handle) = NULL;
-  cs_open_dl = dlsym(dl_handle, "cs_open");
+  cs_err (*cs_open_dl)(cs_arch arch, cs_mode mode, csh *handle) = nullptr;
+  cs_open_dl = reinterpret_cast<decltype(cs_open_dl)>(
+      dlsym(dl_handle, "cs_open"));
   assert(cs_open_dl);
 
-  cs_disasm_dl = dlsym(dl_handle, "cs_disasm");
+  cs_disasm_dl = reinterpret_cast<decltype(cs_disasm_dl)>(
+      dlsym(dl_handle, "cs_disasm"));
   assert(cs_disasm_dl);
 
-  cs_free_dl = dlsym(dl_handle, "cs_free");
+  cs_free_dl =
+      reinterpret_cast<decltype(cs_free_dl)>(dlsym(dl_handle, "cs_free"));
   assert(cs_free_dl);
 
   cs_arch arch = CS_ARCH_RISCV;
-  cs_mode mode = CS_MODE_RISCV32 | CS_MODE_RISCVC;
+  cs_mode mode =
+      static_cast<cs_mode>(CS_MODE_RISCV32 | CS_MODE_RISCVC);
   int ret = cs_open_dl(arch, mode, &handle);
   assert(ret == CS_ERR_OK);
 }
