@@ -37,8 +37,9 @@ word_t paddr_read(paddr_t addr, int len) {
 #endif
   }
   if (!valid_access(addr, len)) {
-    std::fprintf(stderr, "physical address " FMT_PADDR
-                         " is out of bound at pc = " FMT_WORD "\n",
+    std::fprintf(stderr,
+                 "physical address " FMT_PADDR
+                 " is out of bound at pc = " FMT_WORD "\n",
                  addr, cpu.pc);
     set_npc_state(NPC_ABORT, cpu.pc, -1);
     return 0;
@@ -47,8 +48,8 @@ word_t paddr_read(paddr_t addr, int len) {
   word_t data = 0;
   std::memcpy(&data, guest_to_host(addr), len);
 #ifdef CONFIG_MTRACE
-  Log("paddr_read: addr = " FMT_PADDR ", len = %d, data = " FMT_WORD, addr,
-      len, data);
+  Log("paddr_read: addr = " FMT_PADDR ", len = %d, data = " FMT_WORD, addr, len,
+      data);
 #endif
   return data;
 }
@@ -64,8 +65,9 @@ void paddr_write(paddr_t addr, int len, word_t data) {
     return;
   }
   if (!valid_access(addr, len)) {
-    std::fprintf(stderr, "physical address " FMT_PADDR
-                         " is out of bound at pc = " FMT_WORD "\n",
+    std::fprintf(stderr,
+                 "physical address " FMT_PADDR
+                 " is out of bound at pc = " FMT_WORD "\n",
                  addr, cpu.pc);
     set_npc_state(NPC_ABORT, cpu.pc, -1);
     return;
@@ -99,11 +101,12 @@ extern "C" void pmem_write(int waddr, int wdata, char wmask) {
   int first = 0;
   while (first < 4 && (mask & (1u << first)) == 0) {
     first++;
-  }
+  } // 本质上是在还原waddr的低2位，找到第一个有效的字节位置
   int len = 0;
   while (first + len < 4 && (mask & (1u << (first + len))) != 0) {
     len++;
   }
+  // 这是一种通用的设计，mask表示写入的字节位置，len表示连续写入的字节数，first表示第一个有效字节的位置
   uint8_t expected = len == 0 ? 0 : ((1u << len) - 1) << first;
   if (mask != expected || (len != 1 && len != 2 && len != 4)) {
     std::fprintf(stderr, "unsupported write mask: 0x%02x\n", mask);

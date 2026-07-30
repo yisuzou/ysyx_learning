@@ -28,7 +28,8 @@ static void usage(const char *program) {
   std::printf("\t-l,--log=FILE           output log to FILE\n");
   std::printf("\t-d,--diff=REF_SO        run DiffTest with reference REF_SO\n");
   std::printf("\t-p,--port=PORT          run DiffTest with port PORT\n");
-  std::printf("\t-e,--elf=FILE           load function symbols from ELF FILE\n");
+  std::printf(
+      "\t-e,--elf=FILE           load function symbols from ELF FILE\n");
   std::printf("\t-h,--help               display this help and exit\n");
 }
 
@@ -133,7 +134,7 @@ void init_monitor(int argc, char **argv) {
                                       ? ANSI_FMT("ON", ANSI_FG_GREEN)
                                       : ANSI_FMT("OFF", ANSI_FG_RED));
   std::printf("Welcome to %s-NPC!\n",
-              ANSI_FMT("minirv", ANSI_FG_YELLOW ANSI_BG_RED));
+              ANSI_FMT("RV32E", ANSI_FG_YELLOW ANSI_BG_RED));
   std::printf("For help, type \"help\"\n");
 }
 

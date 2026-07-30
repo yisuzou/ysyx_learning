@@ -3,7 +3,9 @@ include $(NPC_HOME)/scripts/build.mk
 
 IMG ?=
 ELF ?=
-ARGS ?= -b --log=$(BUILD_DIR)/npc-log.txt
+DEFAULT_ARGS := --log=$(BUILD_DIR)/npc-log.txt
+DEFAULT_ARGS += $(if $(CONFIG_BATCH_MODE),-b)
+ARGS ?= $(DEFAULT_ARGS)
 DIFF ?= $(if $(CONFIG_DIFFTEST),$(call remove_quote,$(CONFIG_DIFFTEST_REF_PATH)),)
 DIFF_PORT ?= $(if $(CONFIG_DIFFTEST_PORT),$(CONFIG_DIFFTEST_PORT),1234)
 NPC_EXEC := $(BINARY) $(ARGS) \

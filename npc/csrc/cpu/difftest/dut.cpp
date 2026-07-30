@@ -22,8 +22,7 @@ static void *load_symbol(void *handle, const char *name) {
   void *symbol = dlsym(handle, name);
   const char *error = dlerror();
   if (error != nullptr) {
-    std::fprintf(stderr, "cannot load difftest symbol '%s': %s\n", name,
-                 error);
+    std::fprintf(stderr, "cannot load difftest symbol '%s': %s\n", name, error);
     std::exit(EXIT_FAILURE);
   }
   return symbol;
@@ -31,7 +30,9 @@ static void *load_symbol(void *handle, const char *name) {
 
 bool difftest_enabled() { return enabled; }
 
-void init_difftest(const char *ref_so_file, long img_size, int port) {
+void init_difftest(
+    const char *ref_so_file, long img_size,
+    int port) { // port在这里没有使用，主要是为了和nemu保持接口一致性
   if (ref_so_file == nullptr) {
     return;
   }
@@ -41,7 +42,7 @@ void init_difftest(const char *ref_so_file, long img_size, int port) {
                  ref_so_file, dlerror());
     std::exit(EXIT_FAILURE);
   }
-
+  // 在打开的动态库中查找符号，并将其转换为函数指针类型
   ref_difftest_memcpy =
       reinterpret_cast<RefMemcpy>(load_symbol(handle, "difftest_memcpy"));
   ref_difftest_regcpy =
@@ -65,20 +66,22 @@ void difftest_step(vaddr_t pc, vaddr_t npc) {
   if (!enabled) {
     return;
   }
-  if (skip_ref) {
+  if (skip_ref) { // 如果需要跳过参考模型的执行，则将当前 CPU
+                  // 状态复制到参考模型中，并将 skip_ref 标志重置为 false
     ref_difftest_regcpy(&cpu, DIFFTEST_TO_REF);
     skip_ref = false;
     return;
   }
 
   ref_difftest_exec(1);
-  CPUState ref{};
+  CPUState ref{}; // 和nemu保持一致的CPU状态结构体，gpr和pc
   ref_difftest_regcpy(&ref, DIFFTEST_TO_DUT);
   if (!isa_difftest_checkregs(&ref, pc)) {
     set_npc_state(NPC_ABORT, pc, -1);
     isa_reg_display();
   }
-  (void)npc;
+  (void)
+      npc; // 和nemu保持接口一致性，实际上这里没有使用npc参数，没有dut需要追上ref的情况
 }
 #else
 bool difftest_enabled() { return false; }

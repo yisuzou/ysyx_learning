@@ -43,7 +43,9 @@ The former `ITRACE=`, `FTRACE=`, `MTRACE=`, and `TRACE_FLAGS=` Make variables
 are rejected instead of being silently ignored; select their Kconfig
 equivalents.
 
-Run an image in batch mode:
+The **Run in batch mode by default** Kconfig option controls whether the
+default simulator arguments include `-b`. With the default configuration,
+running an image immediately enters batch execution:
 
 ```sh
 make -C npc sim IMG=/path/to/image.bin
@@ -59,8 +61,11 @@ AM `ARCH=minirv-npc run` targets pass their generated ELF automatically when
 NPC's current `.config` enables `FTRACE`. NPC also accepts the NEMU-compatible
 `-e FILE` or `--elf=FILE` command-line option.
 
-Pass an empty `ARGS` value to enter SDB, or use the NEMU-compatible command-line
-options `-b`, `-l FILE`, `-d REF_SO`, and `-p PORT` directly:
+Disable that option to enter interactive SDB by default. An explicit `ARGS`
+value overrides the configured default for one invocation, so `ARGS=` enters
+SDB even when batch mode is configured, while `ARGS=-b` requests batch mode
+when it is not. NPC accepts the NEMU-compatible command-line options `-b`,
+`-l FILE`, `-d REF_SO`, and `-p PORT` directly:
 
 ```sh
 make -C npc sim IMG=/path/to/image.bin ARGS=
@@ -116,19 +121,21 @@ the rising edge, so MMIO callbacks no longer depend on a host-side
 
 ## RV32E compatibility
 
-The current 32-register RTL can run and diff-test legal RV32E programs, but it
-is not yet a strict RV32E implementation. After the RTL restricts the register
-file and rejects references to `x16`-`x31`, the single-cycle host framework
-needs no structural change. Keep `CPUState::gpr[32]` as the DUT observation
-format: the unused slots remain zero. A regular RV32 NEMU reference is
-recommended because RV32E is an instruction/register subset and its 33-word
-difftest ABI already matches NPC.
+`CONFIG_RVE=y` makes the host state match NEMU's RV32E representation:
+`16 GPRs + PC`. Register display, expression lookup, difftest comparison, and
+DPI writeback bounds all use the same `NR_GPR=16`. The default
+`riscv32-ref_defconfig` also enables `CONFIG_RVE`, so the NPC and NEMU
+`difftest_regcpy()` layouts match exactly.
 
-When the RTL becomes strict RV32E, it must reject encodings that name
-`x16`-`x31` and expose only committed architectural writes through DPI. If a
-NEMU reference is configured with `CONFIG_RVE=y`, its difftest ABI changes to
-`16 GPRs + PC`; NPC then needs a small 17-word register-copy adapter instead of
-passing `CPUState` directly.
+The RTL also follows `CONFIG_RVE`. RV32E builds select a 16-entry register file
+and reject instruction encodings that name `x16`-`x31` in an operand field
+actually used by that instruction format. Non-RV32E builds select the separate
+32-entry implementation. The host reports an out-of-range DPI writeback as an
+abort rather than corrupting `CPUState`.
+
+If `CONFIG_RVE` is disabled, NPC returns to the `32 GPRs + PC` layout. NPC and
+the selected reference must always use the same setting; mixing the 17-word and
+33-word ABIs misplaces `pc` and can overrun the smaller state object.
 
 For a later multi-cycle or pipelined core, replace the assumption that one
 `sim_exec_once()` retires one instruction with an explicit commit interface

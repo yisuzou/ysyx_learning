@@ -18,6 +18,7 @@ INC_PATH := $(NPC_HOME)/include $(INC_PATH)
 CXXFLAGS += -std=c++17 -Wall -Werror $(addprefix -I,$(INC_PATH))
 LDFLAGS += -lreadline -ldl
 VERILATOR_TRACE_FLAGS = $(if $(CONFIG_WAVE_TRACE),--trace-fst,)
+VERILATOR_RTL_FLAGS = $(if $(CONFIG_RVE),-DCONFIG_RVE,)
 VERILATOR_INPUTS = $(VSRCS) $(SRCS)
 
 $(shell mkdir -p $(BUILD_DIR))
@@ -30,12 +31,13 @@ $(BINARY): $(VERILATOR_INPUTS) $(CONFIG_DEPS) $(BUILD_DEPS)
 		--top-module $(TOP) $(VERILATOR_INPUTS) \
 		$(addprefix -CFLAGS ,$(CXXFLAGS)) \
 		$(addprefix -LDFLAGS ,$(LDFLAGS)) \
-		$(VERILATOR_TRACE_FLAGS) \
+		$(VERILATOR_TRACE_FLAGS) $(VERILATOR_RTL_FLAGS) \
 		--Mdir $(OBJ_DIR) --exe -o $(abspath $(BINARY)) --build
 
 LINT_FLAGS ?= -Wall -Wno-SYNCASYNCNET
 lint:
-	$(VERILATOR) --lint-only $(LINT_FLAGS) --top-module $(TOP) $(VSRCS)
+	$(VERILATOR) --lint-only $(LINT_FLAGS) $(VERILATOR_RTL_FLAGS) \
+		--top-module $(TOP) $(VSRCS)
 
 clean:
 	rm -rf $(BUILD_DIR)

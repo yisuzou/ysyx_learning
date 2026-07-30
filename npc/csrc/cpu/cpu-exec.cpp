@@ -75,6 +75,9 @@ static void trace_instruction(vaddr_t pc, word_t inst) {
 static void exec_once() {
   vaddr_t pc = sim_pc();
   word_t inst = sim_inst();
+#ifdef CONFIG_ITRACE
+  trace_instruction(pc, inst);
+#endif
   if (sim_invalid_inst()) {
     std::fprintf(stderr,
                  "invalid instruction at pc = " FMT_WORD ", inst = " FMT_WORD
@@ -89,9 +92,7 @@ static void exec_once() {
   cpu.gpr[0] = 0;
   g_nr_guest_inst++;
 
-#ifdef CONFIG_ITRACE
-  trace_instruction(pc, inst);
-#elif !defined(CONFIG_FTRACE)
+#ifndef CONFIG_FTRACE
   (void)inst;
 #endif
 #ifdef CONFIG_FTRACE

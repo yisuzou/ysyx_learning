@@ -75,7 +75,13 @@ bool sim_invalid_inst() { return dut.invalid_inst; }
 bool sim_finished() { return Verilated::gotFinish(); }
 
 extern "C" void npc_reg_write(int index, int data) {
-  if (index > 0 && index < 32) {
+  if (index < 0 || index >= NR_GPR) {
+    std::fprintf(stderr, "invalid GPR write x%d at pc = " FMT_WORD "\n", index,
+                 sim_pc());
+    set_npc_state(NPC_ABORT, sim_pc(), -1);
+    return;
+  }
+  if (index > 0) {
     cpu.gpr[index] = static_cast<word_t>(data);
   }
   cpu.gpr[0] = 0;

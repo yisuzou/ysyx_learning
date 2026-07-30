@@ -4,7 +4,14 @@ menu "ISA"
 
 config ISA
   string
-  default "minirv"
+  default "RV32E"
+
+config RVE
+  bool "Use E extension"
+  default y
+  help
+    Use 16 general-purpose registers and the RV32E difftest register ABI.
+    The NEMU reference must be built with CONFIG_RVE enabled as well.
 
 endmenu
 
@@ -21,6 +28,14 @@ config MSIZE
 endmenu
 
 menu "Testing and Debugging"
+
+config BATCH_MODE
+  bool "Run in batch mode by default"
+  default y
+  help
+    Add -b to the default simulator arguments so SDB executes the image
+    immediately. Disable this option to enter the interactive SDB by default.
+    An explicit ARGS value on the make command line overrides this default.
 
 config TRACE
   bool "Enable tracers"

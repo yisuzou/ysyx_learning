@@ -3,10 +3,19 @@
 
 #include <common.h>
 
+#ifdef CONFIG_RVE
+constexpr int NR_GPR = 16;
+#else
+constexpr int NR_GPR = 32;
+#endif
+
 struct CPUState {
-  word_t gpr[32];
+  word_t gpr[NR_GPR];
   vaddr_t pc;
 };
+
+static_assert(offsetof(CPUState, pc) == sizeof(word_t) * NR_GPR);
+static_assert(sizeof(CPUState) == sizeof(word_t) * (NR_GPR + 1));
 
 extern CPUState cpu;
 

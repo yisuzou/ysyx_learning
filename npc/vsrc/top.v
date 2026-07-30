@@ -36,19 +36,19 @@ module top (
   wire [1:0] src_sel;
   wire [3:0] exu_op;
   wire pc_we;
+  wire [1:0] pc_wsel;
+  wire branch_en;
+  wire [2:0] branch_op;
   wire gpr_we;
+  wire [2:0] gpr_wsel;
   wire is_ebreak;
 
-  reg [31:0] mem_rdata;
-  reg mem_wen;
-  reg [1:0] mem_rbhw;
-  reg [1:0] mem_wbhw;
-  reg [31:0] mem_raddr;
-  reg [31:0] mem_waddr;
-  reg [31:0] mem_wdata;
-  reg [7:0] mem_mask;
+  wire [31:0] mem_rdata;
+  wire mem_wen;
+  wire [1:0] mem_rbhw;
+  wire [1:0] mem_wbhw;
   wire isign;
-  wire valid;
+  wire mem_valid;
   IDU idu1 (
       .inst(inst),
       .rs1(rs1),
@@ -59,16 +59,22 @@ module top (
       .src_sel(src_sel),
       .exu_op(exu_op),
       .pc_we(pc_we),
+      .pc_wsel(pc_wsel),
+      .branch_en(branch_en),
+      .branch_op(branch_op),
       .gpr_we(gpr_we),
       .mem_we(mem_wen),
       .mem_rbhw(mem_rbhw),
       .mem_wbhw(mem_wbhw),
       .isign(isign),
       .is_ebreak(is_ebreak),
-      .valid(valid),
+      .mem_valid(mem_valid),
       .gpr_wsel(gpr_wsel)
   );
   wire [31:0] exu_result;
+  wire exu_zero;
+  wire exu_signed_lt;
+  wire exu_unsigned_lt;
   wire [31:0] Rrs1;
   wire [31:0] Rrs2;
   wire [31:0] gpr_a0;
@@ -76,78 +82,53 @@ module top (
       .rs1(Rrs1),
       .rs2(Rrs2),
       .imm(imm),
+      .pc(pc),
       .src_sel(src_sel),
       .exu_op(exu_op),
-      .result(exu_result)
+      .result(exu_result),
+      .zero(exu_zero),
+      .signed_lt(exu_signed_lt),
+      .unsigned_lt(exu_unsigned_lt)
   );
-
-  reg  [31:0] gpr_wdata;  //允许写入的数据包括pc及其运算，运算结果，立即数
-  wire [ 2:0] gpr_wsel;
-  always @(*) begin
-    case (gpr_wsel)
-      3'd0: begin
-        gpr_wdata = exu_result;
-      end
-      3'd1: begin
-        gpr_wdata = pc + 32'h4;
-      end
-      3'd2: begin
-        gpr_wdata = imm;  //lui
-      end
-      3'd3: begin
-        gpr_wdata = pc + imm;  //auipc
-      end
-      3'd4: begin
-        gpr_wdata = mem_rdata;
-      end
-      default: begin
-        gpr_wdata = 32'h0;
-      end
-    endcase
-  end
+  wire [31:0] gpr_wdata;
+  wire branch_taken;
+  BranchUnit branch_unit1 (
+      .branch_en(branch_en),
+      .branch_op(branch_op),
+      .zero(exu_zero),
+      .signed_lt(exu_signed_lt),
+      .unsigned_lt(exu_unsigned_lt),
+      .branch_taken(branch_taken)
+  );
+  wire pc_write_en = pc_we || branch_taken;
   WBU wbu1 (
       .clk(clk),
       .rst_n(rst_n),
-      .pc_we(pc_we),
-      .pc_wdata(exu_result & (~32'h1)),
+      .pc_we(pc_write_en),
+      .pc_wsel(pc_wsel),
+      .exu_result(exu_result),
+      .imm(imm),
       .gpr_we(gpr_we),
-      .gpr_wdata(gpr_wdata),
+      .gpr_wsel(gpr_wsel),
+      .mem_rdata(mem_rdata),
       .rs1(rs1),
       .rs2(rs2),
       .rd(rd),
       .gpr_rdata1(Rrs1),
       .gpr_rdata2(Rrs2),
       .gpr_a0(gpr_a0),
+      .gpr_wdata(gpr_wdata),
       .pc(pc)
   );
-  //访存单元
-  assign mem_raddr = exu_result;
-  always @(*) begin
-    mem_waddr = exu_result;
-    case (mem_wbhw)
-      2'd1: begin
-        mem_mask = 8'b00000001 << mem_waddr[1:0];
-      end
-      2'd2: begin
-        mem_mask = 8'b00000011 << mem_waddr[1:0];
-      end
-      2'd3: begin
-        mem_mask = 8'b00001111;
-      end
-      default: mem_mask = 8'hf;
-    endcase
-    mem_wdata = Rrs2 << (8 * mem_waddr[1:0]);
-  end
   LSU lsu1 (
       .clk(clk),
       .rst_n(rst_n),
       .mem_rbhw(mem_rbhw),  //由译码IDU给出
-      .mem_raddr(mem_raddr),  //由EXU给出
-      .valid(valid),  //IDU给出
+      .mem_addr(exu_result),  //由EXU给出
+      .mem_valid(mem_valid),  //IDU给出
       .wen(mem_wen),  //IDU给出
-      .mem_waddr(mem_waddr),  //exu
-      .mem_wdata(mem_wdata),  //wbu
-      .mem_wmask(mem_mask),  //idu
+      .mem_wbhw(mem_wbhw),  //由译码IDU给出
+      .mem_wdata_raw(Rrs2),  //由GPR给出
       .isign(isign),  //idu
       .mem_rdata_r(mem_rdata)
   );

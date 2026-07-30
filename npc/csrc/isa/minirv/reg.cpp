@@ -10,11 +10,11 @@ static const char *regs[] = {
     "s6", "s7", "s8", "s9",  "s10", "s11", "t3", "t4", "t5", "t6"};
 
 const char *reg_name(int index) {
-  return index >= 0 && index < ARRLEN(regs) ? regs[index] : nullptr;
+  return index >= 0 && index < NR_GPR ? regs[index] : nullptr;
 }
 
 void isa_reg_display() {
-  for (int i = 0; i < ARRLEN(regs); i++) {
+  for (int i = 0; i < NR_GPR; i++) {
     std::printf("%-4s: " FMT_WORD "%s", regs[i], cpu.gpr[i],
                 i % 4 == 3 ? "\n" : "  ");
   }
@@ -32,7 +32,7 @@ word_t isa_reg_str2val(const char *name, bool *success) {
   if (name[0] == '$' && name[1] != '0') {
     name++;
   }
-  for (int i = 0; i < ARRLEN(regs); i++) {
+  for (int i = 0; i < NR_GPR; i++) {
     if (std::strcmp(name, regs[i]) == 0) {
       return cpu.gpr[i];
     }
@@ -55,7 +55,7 @@ bool isa_difftest_checkregs(const CPUState *ref, vaddr_t pc) {
   if (!check_reg("pc", pc, ref->pc, cpu.pc)) {
     return false;
   }
-  for (int i = 0; i < ARRLEN(regs); i++) {
+  for (int i = 0; i < NR_GPR; i++) {
     if (!check_reg(regs[i], pc, ref->gpr[i], cpu.gpr[i])) {
       return false;
     }
