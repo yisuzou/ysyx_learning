@@ -3,7 +3,8 @@ include $(AM_HOME)/scripts/platform/nemu.mk
 CFLAGS  += -DISA_H=\"riscv/riscv.h\"
 COMMON_CFLAGS += -march=rv32im_zicsr -mabi=ilp32   # overwrite
 LDFLAGS       += -melf32lriscv                     # overwrite
-
+#LINKAGE       += $(shell riscv64-unknown-elf-gcc -march=rv32im_zicsr -mabi=ilp32 -print-libgcc-file-name)
+#LINKAGE       += $(shell riscv64-unknown-elf-gcc -march=rv32e_zicsr -mabi=ilp32e -print-libgcc-file-name)
 AM_SRCS += riscv/nemu/start.S \
            riscv/nemu/cte.c \
            riscv/nemu/trap.S \
