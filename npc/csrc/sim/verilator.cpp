@@ -59,6 +59,8 @@ void sim_exec_once() {
 }
 
 void sim_finish() {
+  sim_exec_once();
+  sim_exec_once();
   dut.final();
 #if VM_TRACE_FST
   if (trace != nullptr) {

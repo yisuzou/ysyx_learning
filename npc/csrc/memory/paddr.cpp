@@ -26,6 +26,10 @@ static bool valid_access(paddr_t addr, int len) {
          addr - CONFIG_MBASE <= CONFIG_MSIZE - static_cast<uint32_t>(len);
 }
 
+static bool valid_dpi_access_len(uint8_t len) {
+  return len == 1 || len == 2 || len == 4;
+}
+
 word_t paddr_read(paddr_t addr, int len) {
   if (!in_pmem(addr)) {
 #ifdef CONFIG_DEVICE
@@ -89,29 +93,24 @@ extern "C" int pmem_ifetch(int raddr) {
   return static_cast<int>(data);
 }
 
-extern "C" int pmem_read(int raddr) {
-  paddr_t addr = static_cast<paddr_t>(raddr) & ~0x3u;
-  return static_cast<int>(paddr_read(addr, 4));
+extern "C" int pmem_read(int raddr, char rlen) {
+  uint8_t len = static_cast<uint8_t>(rlen);
+  if (!valid_dpi_access_len(len)) {
+    std::fprintf(stderr, "unsupported read length: %u\n",
+                 static_cast<unsigned>(len));
+    set_npc_state(NPC_ABORT, cpu.pc, -1);
+    return 0;
+  }
+  return static_cast<int>(paddr_read(static_cast<paddr_t>(raddr), len));
 }
 
-extern "C" void pmem_write(int waddr, int wdata, char wmask) {
-  paddr_t addr = static_cast<paddr_t>(waddr) & ~0x3u;
-  word_t data = static_cast<word_t>(wdata);
-  uint8_t mask = static_cast<uint8_t>(wmask);
-  int first = 0;
-  while (first < 4 && (mask & (1u << first)) == 0) {
-    first++;
-  } // 本质上是在还原waddr的低2位，找到第一个有效的字节位置
-  int len = 0;
-  while (first + len < 4 && (mask & (1u << (first + len))) != 0) {
-    len++;
-  }
-  // 这是一种通用的设计，mask表示写入的字节位置，len表示连续写入的字节数，first表示第一个有效字节的位置
-  uint8_t expected = len == 0 ? 0 : ((1u << len) - 1) << first;
-  if (mask != expected || (len != 1 && len != 2 && len != 4)) {
-    std::fprintf(stderr, "unsupported write mask: 0x%02x\n", mask);
+extern "C" void pmem_write(int waddr, int wdata, char wlen) {
+  uint8_t len = static_cast<uint8_t>(wlen);
+  if (!valid_dpi_access_len(len)) {
+    std::fprintf(stderr, "unsupported write length: %u\n",
+                 static_cast<unsigned>(len));
     set_npc_state(NPC_ABORT, cpu.pc, -1);
     return;
   }
-  paddr_write(addr + first, len, data >> (first * 8));
+  paddr_write(static_cast<paddr_t>(waddr), len, static_cast<word_t>(wdata));
 }

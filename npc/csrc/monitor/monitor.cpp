@@ -132,9 +132,9 @@ void init_monitor(int argc, char **argv) {
 #endif
   Log("Differential testing: %s", difftest_enabled()
                                       ? ANSI_FMT("ON", ANSI_FG_GREEN)
-                                      : ANSI_FMT("OFF", ANSI_FG_RED));
+                                      : ANSI_FMT("OFF", ANSI_FG_PINK));
   std::printf("Welcome to %s-NPC!\n",
-              ANSI_FMT("RV32E", ANSI_FG_YELLOW ANSI_BG_RED));
+              ANSI_FMT("RV32E", ANSI_FG_YELLOW ANSI_BG_PINK));
   std::printf("For help, type \"help\"\n");
 }
 

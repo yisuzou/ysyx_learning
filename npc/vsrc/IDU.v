@@ -33,6 +33,11 @@ module IDU (
     output reg [2:0] branch_op,
     output reg gpr_we,
     output reg [2:0] gpr_wsel,
+    //CSR相关
+    output reg csr_we,
+    output reg [1:0] csr_wsel,
+    output reg [11:0] csr_wraddr,
+    output reg imm2csr,
     //访存相关
     output reg mem_we,
     output reg [1:0] mem_rbhw,  //0:no_read,1: byte, 2:half 3:word
@@ -40,7 +45,8 @@ module IDU (
     output reg isign,  //表示扩展时是否视为有符号数；
     output reg mem_valid,  //表示访存操作是否有效，防止在访存阶段出现无效的访存操作
     //ebreak信号
-    output reg is_ebreak
+    output reg is_ebreak,
+    output reg is_ecall
 );
   localparam SRC_REG_REG = 2'h0;
   localparam SRC_REG_IMM = 2'h1;
@@ -59,12 +65,18 @@ module IDU (
 
   localparam PC_EXU_RESULT = 2'h0;
   localparam PC_BRANCH     = 2'h1;
+  localparam PC_TO_MTVEC   = 2'h2;
+  localparam PC_TO_MEPC    = 2'h3;
 
   localparam GPR_EXU_RESULT = 3'd0;
   localparam GPR_PC_PLUS4   = 3'd1;
   localparam GPR_IMMEDIATE  = 3'd2;
   localparam GPR_PC_IMM     = 3'd3;
   localparam GPR_MEM_DATA   = 3'd4;
+
+  localparam CSR_EXU_RESULT = 2'd0;
+  localparam CSR_IMMEDIATE  = 2'd1;
+  localparam CSR_REG   = 2'd2;
 
   localparam MEM_NONE = 2'd0;
   localparam MEM_BYTE = 2'd1;
@@ -112,12 +124,17 @@ module IDU (
     imm = 32'h0;
     src_sel = SRC_REG_REG;
     mem_valid = 1'b0;
+    csr_we = 1'b0;
+    csr_wraddr = 12'hb00;
+    csr_wsel = CSR_EXU_RESULT;
+    imm2csr = 1'b0;
     //R是寄存器型，将要涉及到寄存器的操作
     //基本流程为，读取两个源寄存器内容，运算（EXU负责），写到目标寄存器（WBU负责，需要给信
     //号，给寄存器地址）
     rs1 = rs1_immUJ;
     rs2 = rs2_immIUJ;
     rd = rd_immSB;
+    is_ecall = 1'b0;
 `ifdef CONFIG_RVE
     invalid_gpr = 1'b0;
 `endif
@@ -454,15 +471,54 @@ module IDU (
         endcase
 
       end
-      //ebreak指令
+      //ebreak,ecall指令&CSR指令
       7'b1110011: begin
-        case (inst)
-          32'h00100073: begin
-            is_ebreak = 1'b1;
+        imm = immI;
+        case (funct3_immUJ)
+          3'h0: begin
+            case (inst)
+              32'h00000073: begin
+                //ecall
+                pc_we = 1'b1;
+                pc_wsel = PC_TO_MTVEC;
+                is_ecall = 1'b1;//只输出ecall状态，后续单元根据ecall状态进行原子de完成相关操作
+              end
+              32'h00100073: begin
+                //ebreak
+                is_ebreak = 1'b1;
+              end
+              32'h30200073: begin
+                //mret
+                pc_we = 1'b1;
+                pc_wsel = PC_TO_MEPC;
+                csr_wraddr = 12'h341; //mepc
+              end
+              default: begin
+                invalid_inst = 1'b1;
+              end
+            endcase
           end
-          default: begin
-            invalid_inst = 1'b1;
+          3'h2: begin
+            //csrrs
+          csr_we = 1'b1;
+          imm2csr = 1'b1;
+          csr_wsel = CSR_EXU_RESULT;
+          csr_wraddr = imm[11:0];
+          exu_op = EXU_OR;
+          src_sel = SRC_REG_IMM;
+          gpr_we = 1'b1;
+          gpr_wsel = GPR_IMMEDIATE;
           end
+          3'h1: begin
+            //csrrw
+          csr_we = 1'b1;
+          imm2csr = 1'b1;
+          csr_wsel = CSR_REG;
+          csr_wraddr = imm[11:0];
+          gpr_we = 1'b1;
+          gpr_wsel = GPR_IMMEDIATE;
+          end
+          default: invalid_inst = 1'b1;
         endcase
       end
       default: begin

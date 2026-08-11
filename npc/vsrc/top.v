@@ -1,10 +1,5 @@
 import "DPI-C" function void npc_ebreak(input int halt_code, input int pc);
 import "DPI-C" function void npc_reg_write(input int index, input int data);
-import "DPI-C" function void pmem_write(
-  input int  waddr,
-  input int  wdata,
-  input byte wmask
-);
 module top (
     input  clk,
     input  rst_n,
@@ -33,6 +28,7 @@ module top (
   wire [4:0] rs2;
   wire [4:0] rd;
   wire [31:0] imm;
+  wire [31:0] imm_raw;
   wire [1:0] src_sel;
   wire [3:0] exu_op;
   wire pc_we;
@@ -42,19 +38,31 @@ module top (
   wire gpr_we;
   wire [2:0] gpr_wsel;
   wire is_ebreak;
-
+  wire is_ecall;
   wire [31:0] mem_rdata;
   wire mem_wen;
   wire [1:0] mem_rbhw;
   wire [1:0] mem_wbhw;
   wire isign;
   wire mem_valid;
+ 
+  wire csr_we;
+  wire [1:0]csr_wsel;
+  wire [11:0] csr_wraddr;
+  wire [31:0] csr_wdata;
+  wire [31:0] csr_rdata;
+  wire imm2csr;
+
+  reg [31:0] tmp_csr = csr_rdata;
+
+  assign imm = imm2csr ? tmp_csr : imm_raw;//csr指令的立即数语义为csr寄存器的值，而不是指令中的立即数
+
   IDU idu1 (
       .inst(inst),
       .rs1(rs1),
       .rs2(rs2),
       .rd(rd),
-      .imm(imm),
+      .imm(imm_raw),
       .invalid_inst(invalid_inst),
       .src_sel(src_sel),
       .exu_op(exu_op),
@@ -69,7 +77,12 @@ module top (
       .isign(isign),
       .is_ebreak(is_ebreak),
       .mem_valid(mem_valid),
-      .gpr_wsel(gpr_wsel)
+      .gpr_wsel(gpr_wsel),
+      .csr_we(csr_we),
+      .csr_wsel(csr_wsel),
+      .csr_wraddr(csr_wraddr),
+      .imm2csr(imm2csr),
+      .is_ecall(is_ecall)
   );
   wire [31:0] exu_result;
   wire exu_zero;
@@ -114,11 +127,18 @@ module top (
       .rs1(rs1),
       .rs2(rs2),
       .rd(rd),
+      .is_ecall(is_ecall),
       .gpr_rdata1(Rrs1),
       .gpr_rdata2(Rrs2),
       .gpr_a0(gpr_a0),
       .gpr_wdata(gpr_wdata),
-      .pc(pc)
+      .pc(pc),
+      .csr_we(csr_we),
+      .csr_wsel(csr_wsel),
+      .csr_wraddr(csr_wraddr),
+      .csr_wdata(csr_wdata),
+      .csr_rdata1(csr_rdata),
+      .invalid_csr_access(invalid_inst)
   );
   LSU lsu1 (
       .clk(clk),
