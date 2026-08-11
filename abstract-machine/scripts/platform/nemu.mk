@@ -9,6 +9,7 @@ AM_SRCS := platform/nemu/trm.c \
 
 CFLAGS    += -fdata-sections -ffunction-sections
 CFLAGS    += -I$(AM_HOME)/am/src/platform/nemu/include
+CFLAGS    += -g
 LDSCRIPTS += $(AM_HOME)/scripts/linker.ld
 LDFLAGS   += --defsym=_pmem_start=0x80000000 --defsym=_entry_offset=0x0
 LDFLAGS   += --gc-sections -e _start
@@ -36,12 +37,12 @@ insert-arg: image
 	@python $(AM_HOME)/tools/insert-arg.py $(IMAGE).bin $(MAINARGS_MAX_LEN) $(MAINARGS_PLACEHOLDER) "$(mainargs)"
 
 image: image-dep
-	@$(OBJDUMP) -d $(IMAGE).elf > $(IMAGE).txt
+	@$(OBJDUMP) -S -d $(IMAGE).elf > $(IMAGE).txt
 	@echo + OBJCOPY "->" $(IMAGE_REL).bin
 	@$(OBJCOPY) -S --set-section-flags .bss=alloc,contents -O binary $(IMAGE).elf $(IMAGE).bin
 
 run: insert-arg
-	$(NEMU_AUTOPLAY_ENV) $(MAKE) -C $(NEMU_HOME) ISA=$(ISA) $(NEMU_AUTOPLAY_MAKE) run ARGS="$(NEMUFLAGS) -b" IMG=$(IMAGE).bin
+	$(NEMU_AUTOPLAY_ENV) $(MAKE) -C $(NEMU_HOME) ISA=$(ISA) $(NEMU_AUTOPLAY_MAKE) run ARGS="$(NEMUFLAGS) " IMG=$(IMAGE).bin
 
 gdb: insert-arg
 	$(MAKE) -C $(NEMU_HOME) ISA=$(ISA) gdb ARGS="$(NEMUFLAGS)" IMG=$(IMAGE).bin

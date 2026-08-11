@@ -88,6 +88,7 @@ static int cmd_info(char *args) {
   } else {
     if (!strcmp(arg, "r")) {
       isa_reg_display();
+      isa_csr_display();
     } else if (!strcmp(arg, "w")) { // 监视点信息查看
       // 显示wp的所有信息；遍历查找所有所有可能的序号
       printf("%-5s  %-16s  %-16s\n", "NO", "EXPR", "Value");

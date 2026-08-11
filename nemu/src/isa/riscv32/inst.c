@@ -14,9 +14,11 @@
  ***************************************************************************************/
 
 #include "common.h"
+#include "debug.h"
 #ifdef CONFIG_FTRACE
 #include "ftrace.h"
 #endif
+#include "local-include/csr.h"
 #include "local-include/reg.h"
 #include "macro.h"
 #include <cpu/cpu.h>
@@ -25,6 +27,7 @@
 #include <stdint.h>
 
 #define R(i) gpr(i)
+#define CSR(i) csr(i)
 #define Mr vaddr_read
 #define Mw vaddr_write
 #ifdef CONFIG_FTRACE
@@ -168,6 +171,8 @@ static int decode_exec(Decode *s) {
           R(rd) = (sword_t)src1 >> (src2 & 0x1f));
   INSTPAT("0000000 ????? ????? 010 ????? 01100 11", slt, R,
           R(rd) = ((sword_t)src1 < (sword_t)src2));
+  INSTPAT("0011000 00010 00000 000 00000 11100 11", mret, R,
+          s->dnpc = CSR(0x341));
   //  I TYPE
   INSTPAT("??????? ????? ????? 000 ????? 00000 11", lb, I,
           R(rd) = SEXT(Mr(src1 + imm, 1), 8));
@@ -200,6 +205,13 @@ static int decode_exec(Decode *s) {
                        16)); // lh加载的数据要当作有符号数处理，所以应该sword_t
   INSTPAT("??????? ????? ????? 101 ????? 00000 11", lhu, I,
           R(rd) = Mr(src1 + imm, 2)); // lhu要加载的数据是一个无符号数
+  INSTPAT("??????? ????? ????? 010 ????? 11100 11", csrrs, I,
+          word_t tmp = CSR(imm);
+          CSR(imm) = tmp | src1; R(rd) = tmp);
+  INSTPAT("??????? ????? ????? 001 ????? 11100 11", csrrw, I,
+          word_t tmp = CSR(imm);
+          CSR(imm) = src1; R(rd) = tmp);
+
   // B type
   INSTPAT("??????? ????? ????? 000 ????? 11000 11", beq, B,
           s->dnpc =
@@ -231,8 +243,10 @@ static int decode_exec(Decode *s) {
   INSTPAT("??????? ????? ????? ??? ????? 11011 11", jal, J, R(rd) = s->pc + 4,
           s->dnpc = s->pc + imm);
   // N type
-  INSTPAT("0000000 00001 00000 000 00000 11100 11", ebreak, N,
+  INSTPAT("0000000 00001 00000 000 00000 11100 11", ebreak, I,
           NEMUTRAP(s->pc, R(10))); // R(10) is $a0
+  INSTPAT("0000000 00000 00000 000 00000 11100 11", ecall, I,
+          s->dnpc = isa_raise_intr(11, s->pc);); //
   INSTPAT("??????? ????? ????? ??? ????? ????? ??", inv, N, INV(s->pc));
   INSTPAT_END();
 

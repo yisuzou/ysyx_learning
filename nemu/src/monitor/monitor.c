@@ -109,7 +109,8 @@ static int parse_args(int argc, char *argv[]) {
       printf("\t-l,--log=FILE           output log to FILE\n");
       printf("\t-d,--diff=REF_SO        run DiffTest with reference REF_SO\n");
       printf("\t-p,--port=PORT          run DiffTest with port PORT\n");
-      printf("\t-e,--elf=FILE           enable function tracer (ftrace) with symbols from FILE\n");
+      printf("\t-e,--elf=FILE           enable function tracer (ftrace) with "
+             "symbols from FILE\n");
       printf("\n");
       exit(0);
     }
@@ -143,7 +144,7 @@ void init_monitor(int argc, char *argv[]) {
 
   /* Initialize differential testing. */
   init_difftest(diff_so_file, img_size, difftest_port);
-
+  printf("Differential testing: %s\n", diff_so_file);
   /* Initialize the simple debugger. */
   init_sdb();
 

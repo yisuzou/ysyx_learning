@@ -173,6 +173,11 @@ config FTRACE
   bool "Enable function call tracer"
   default n
 
+config ETRACE
+  depends on TRACE && TARGET_NATIVE_ELF && ENGINE_INTERPRETER
+  bool "Enable execption tracer"
+  default n
+
 config EXPR_TEST
   bool "Enable expr test"
   default n

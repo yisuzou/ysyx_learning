@@ -13,6 +13,7 @@
  * See the Mulan PSL v2 for more details.
  ***************************************************************************************/
 
+#include "local-include/csr.h"
 #include <isa.h>
 #include <memory/paddr.h>
 
@@ -32,6 +33,9 @@ static void restart() {
 
   /* The zero register is always 0. */
   cpu.gpr[0] = 0;
+  cpu.csr[CSR_IDX_MSTATUS] = 0x1800;
+  cpu.csr[CSR_IDX_MVENDORID] = 0x79737978;
+  cpu.csr[CSR_IDX_MARCHID] = 0x018d5749;
 }
 
 void init_isa() {
