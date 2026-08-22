@@ -24,7 +24,7 @@ module WBU (
     output [31:0] gpr_rdata2,
     output [31:0] gpr_a0,
     output reg [31:0] gpr_wdata,
-    output reg [31:0] csr_wdata,
+   // output reg [31:0] csr_wdata,
     output reg [31:0] pc,
     output invalid_csr_access
 );
@@ -40,10 +40,10 @@ module WBU (
   localparam GPR_MEM_DATA   = 3'd4;
  
   localparam CSR_EXU_RESULT = 2'd0;
-  localparam CSR_IMMEDIATE  = 2'd1;
+  //localparam CSR_IMMEDIATE  = 2'd1;
   localparam CSR_REG   = 2'd2;
-  localparam CSR_XXX2   = 2'd3;
-
+  //localparam CSR_XXX2   = 2'd3;
+  reg [31:0] csr_wdata;
   reg [31:0] pc_wdata;
   reg [31:0] mepc_data;
   wire [31:0] mtvec_data;//由CSR模块提供

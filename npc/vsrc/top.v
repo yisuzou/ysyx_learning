@@ -49,7 +49,7 @@ module top (
   wire csr_we;
   wire [1:0]csr_wsel;
   wire [11:0] csr_wraddr;
-  wire [31:0] csr_wdata;
+  //wire [31:0] csr_wdata;
   wire [31:0] csr_rdata;
   wire imm2csr;
 
@@ -136,7 +136,7 @@ module top (
       .csr_we(csr_we),
       .csr_wsel(csr_wsel),
       .csr_wraddr(csr_wraddr),
-      .csr_wdata(csr_wdata),
+      //.csr_wdata(csr_wdata),
       .csr_rdata1(csr_rdata),
       .invalid_csr_access(invalid_inst)
   );

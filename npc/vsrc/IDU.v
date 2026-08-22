@@ -75,7 +75,7 @@ module IDU (
   localparam GPR_MEM_DATA   = 3'd4;
 
   localparam CSR_EXU_RESULT = 2'd0;
-  localparam CSR_IMMEDIATE  = 2'd1;
+  //localparam CSR_IMMEDIATE  = 2'd1;
   localparam CSR_REG   = 2'd2;
 
   localparam MEM_NONE = 2'd0;

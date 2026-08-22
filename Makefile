@@ -1,4 +1,4 @@
-STUID = ysyx_1231233231
+STUID = ysyx_26040137
 STUNAME = 周易书
 
 # DO NOT modify the following code!!!
