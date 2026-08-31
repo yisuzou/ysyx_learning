@@ -14,10 +14,12 @@
  */
 
 int printf(const char *fmt, ...) {
-  char buf[1024]; // 栈上固定缓冲区，klib 面向裸机/嵌入式环境，1024 字节足够覆盖大多数输出
+  char buf[4096]; // 栈上固定缓冲区，klib 面向裸机/嵌入式环境，4096
+                  // 字节足够覆盖大多数输出
   va_list args;
   va_start(args, fmt);
-  int n = vsprintf(buf, fmt, args); // va_list 不可直接传递给 sprintf，必须通过 vsprintf 中转
+  int n = vsprintf(
+      buf, fmt, args); // va_list 不可直接传递给 sprintf，必须通过 vsprintf 中转
   va_end(args);
   for (int i = 0; i < n; i++) {
     putch(buf[i]);
@@ -40,7 +42,8 @@ static int format_int(char *dst, int val) {
   unsigned int uval;
   if (val < 0) {
     *dst++ = '-';
-    uval = (unsigned int)(-(val + 1)) + 1; // 避免对 INT_MIN 直接取反导致有符号溢出
+    uval =
+        (unsigned int)(-(val + 1)) + 1; // 避免对 INT_MIN 直接取反导致有符号溢出
   } else {
     uval = (unsigned int)val;
   }
