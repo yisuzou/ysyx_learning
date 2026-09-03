@@ -68,6 +68,21 @@ static int format_str(char *dst, const char *s) {
   return dst - start;
 }
 
+/* format_hex: 将无符号整数转为十六进制字符串写入 dst，返回写入字符数 */
+static int format_hex(char *dst, uintptr_t val) {
+  char *start = dst;
+  char num[2 * sizeof(uintptr_t)];
+  int idx = 0;
+  do {
+    num[idx++] = "0123456789abcdef"[val & 0xf];
+    val >>= 4;
+  } while (val > 0);
+  while (idx > 0) {
+    *dst++ = num[--idx];
+  }
+  return dst - start;
+}
+
 /*
  * vsprintf: 核心格式化引擎，接受 va_list
  * 遍历 fmt，遇到 % 根据后续字符（s/d/%）做替换，否则原样拷贝
@@ -83,6 +98,16 @@ int vsprintf(char *out, const char *fmt, va_list ap) {
         dst += format_int(dst, va_arg(ap, int));
       } else if (*src == 'c') {
         *dst++ = (char)va_arg(ap, int);
+      } else if (*src == 'p' || *src == 'x') {
+        uintptr_t val;
+        if (*src == 'p') {
+          *dst++ = '0';
+          *dst++ = 'x';
+          val = (uintptr_t)va_arg(ap, void *);
+        } else {
+          val = (uintptr_t)va_arg(ap, unsigned int);
+        }
+        dst += format_hex(dst, val);
       } else if (*src == '%') { // %% → 输出字面量 '%'
         *dst++ = '%';
       }
