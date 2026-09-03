@@ -76,6 +76,29 @@ word_t sim_inst() { return dut.debug_inst; }
 bool sim_invalid_inst() { return dut.invalid_inst; }
 bool sim_finished() { return Verilated::gotFinish(); }
 
+word_t sim_csr(int id) {
+  switch (id) {
+  case SIM_CSR_MSTATUS:
+    return dut.debug_mstatus;
+  case SIM_CSR_MTVEC:
+    return dut.debug_mtvec;
+  case SIM_CSR_MEPC:
+    return dut.debug_mepc;
+  case SIM_CSR_MCAUSE:
+    return dut.debug_mcause;
+  case SIM_CSR_MCYCLE:
+    return dut.debug_mcycle;
+  case SIM_CSR_MCYCLEH:
+    return dut.debug_mcycleh;
+  case SIM_CSR_MVENDORID:
+    return dut.debug_mvendorid;
+  case SIM_CSR_MARCHID:
+    return dut.debug_marchid;
+  default:
+    return 0;
+  }
+}
+
 extern "C" void npc_reg_write(int index, int data) {
   if (index < 0 || index >= NR_GPR) {
     std::fprintf(stderr, "invalid GPR write x%d at pc = " FMT_WORD "\n", index,

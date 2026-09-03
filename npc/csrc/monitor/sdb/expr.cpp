@@ -41,6 +41,10 @@ static Rule rules[] = {
     {"\\$(ra|sp|gp|tp|t[0-6]|a[0-7]|s([0-9]|1[01])|pc)", TK_REGNAME},
     {"\\$[0-9]+", TK_REGNAME},
     {"(ra|sp|gp|tp|t[0-6]|a[0-7]|s([0-9]|1[01])|pc)", TK_REGNAME},
+    {"\\$(mstatus|mtvec|mepc|mcause|mcycleh|mcycle|mvendorid|marchid)",
+     TK_REGNAME},
+    {"(mstatus|mtvec|mepc|mcause|mcycleh|mcycle|mvendorid|marchid)",
+     TK_REGNAME},
     {"\\$", TK_REG},
 };
 

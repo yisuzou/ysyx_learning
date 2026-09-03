@@ -7,11 +7,19 @@ module top (
     //input [31:0] mem_rdata, //由于使用了DPI-C机制，通过内部信号访问即可
     output invalid_inst,
     output [31:0] debug_pc,
-    output [31:0] debug_inst
+    output [31:0] debug_inst,
     //output [31:0] pc
     //output mem_we,
     //output [31:0] mem_addr,
     //output [31:0] mem_wdata
+    output [31:0] debug_mstatus,
+    output [31:0] debug_mtvec,
+    output [31:0] debug_mepc,
+    output [31:0] debug_mcause,
+    output [31:0] debug_mcycle,
+    output [31:0] debug_mcycleh,
+    output [31:0] debug_mvendorid,
+    output [31:0] debug_marchid
 );
   //IFU start
   wire [31:0] inst;
@@ -138,7 +146,15 @@ module top (
       .csr_wraddr(csr_wraddr),
       //.csr_wdata(csr_wdata),
       .csr_rdata1(csr_rdata),
-      .invalid_csr_access(invalid_inst)
+      .invalid_csr_access(invalid_inst),
+      .dbg_mstatus(debug_mstatus),
+      .dbg_mtvec(debug_mtvec),
+      .dbg_mepc(debug_mepc),
+      .dbg_mcause(debug_mcause),
+      .dbg_mcycle(debug_mcycle),
+      .dbg_mcycleh(debug_mcycleh),
+      .dbg_mvendorid(debug_mvendorid),
+      .dbg_marchid(debug_marchid)
   );
   LSU lsu1 (
       .clk(clk),

@@ -26,7 +26,15 @@ module WBU (
     output reg [31:0] gpr_wdata,
    // output reg [31:0] csr_wdata,
     output reg [31:0] pc,
-    output invalid_csr_access
+    output invalid_csr_access,
+    output [31:0] dbg_mstatus,
+    output [31:0] dbg_mtvec,
+    output [31:0] dbg_mepc,
+    output [31:0] dbg_mcause,
+    output [31:0] dbg_mcycle,
+    output [31:0] dbg_mcycleh,
+    output [31:0] dbg_mvendorid,
+    output [31:0] dbg_marchid
 );
   localparam PC_EXU_RESULT = 2'h0;
   localparam PC_BRANCH     = 2'h1;
@@ -107,6 +115,14 @@ module WBU (
       .mtvec_data(mtvec_data),
       .invalid_csr_access(invalid_csr_access)
   );
+  assign dbg_mstatus   = csr1.mstatus;
+  assign dbg_mtvec     = csr1.mtvec;
+  assign dbg_mepc      = csr1.mepc;
+  assign dbg_mcause    = csr1.mcause;
+  assign dbg_mcycle    = csr1.mcycle;
+  assign dbg_mcycleh   = csr1.mcycleh;
+  assign dbg_mvendorid = csr1.mvendorid;
+  assign dbg_marchid   = csr1.marchid;
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       pc <= 32'h80000000;

@@ -21,6 +21,7 @@ extern CPUState cpu;
 
 void isa_reg_display();
 word_t isa_reg_str2val(const char *name, bool *success);
+word_t isa_csr_str2val(const char *name, bool *success);
 const char *reg_name(int index);
 bool isa_difftest_checkregs(const CPUState *ref, vaddr_t pc);
 
