@@ -126,6 +126,13 @@ endmenu
 
 menu "Testing and Debugging"
 
+config BATCH_MODE
+  bool "Run NEMU in batch mode"
+  default y
+  help
+    Automatically pass -b when NEMU is launched through make run.
+    Disable this option to enter the interactive SDB monitor.
+
 
 config TRACE
   bool "Enable tracer"

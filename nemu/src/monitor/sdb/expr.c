@@ -65,7 +65,9 @@ static struct rule {
     {"\\(", '('}, //(,),本身在正则表达式中就有组合的含义，所以也需要转义来识别
     {"\\)", ')'},
     // 新增十六进制数输入，寄存器访问，等于，不等于，逻辑与，解引用
-    {"((\\$0)|ra|sp|gp|tp|t[0-6]|a[0-7]|s([0-9]|1[01])|pc)", TK_REGNAME},
+    {"((\\$0)|ra|sp|gp|tp|t[0-6]|a[0-7]|s([0-9]|1[01])|pc|mstatus|mepc|"
+     "mcause|mtval|mie|mtvec|mcycleh|mcycle|mvendorid|marchid)",
+     TK_REGNAME},
     //    {"(\\$0)", TK_REGNAME}, // 寄存器名匹配
     //    {"pc", TK_PC},
     {"\\$", TK_REG}, // 当作单目运算符

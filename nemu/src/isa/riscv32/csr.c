@@ -12,6 +12,7 @@ void isa_csr_display() {
 word_t isa_csr_str2val(const char *s, bool *success) {
   for (int i = 0; i < CSR_NUM; i++) {
     if (strcmp(s, csr_map[i].name) == 0) {
+      *success = true;
       return cpu.csr[csr_map[i].idx];
     }
   }
