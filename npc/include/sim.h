@@ -25,5 +25,5 @@ word_t sim_inst();
 bool sim_invalid_inst();
 bool sim_finished();
 word_t sim_csr(int id);
-
+bool sim_debug_commit();
 #endif

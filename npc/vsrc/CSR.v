@@ -13,9 +13,9 @@ module CSR #(
   input [ADDR_WIDTH-1:0] raddr1,
   //input [ADDR_WIDTH-1:0] raddr2,
   output reg [DATA_WIDTH-1:0] rdata1,
-  output reg [DATA_WIDTH-1:0] mtvec_data,
+  output     [DATA_WIDTH-1:0] mtvec_data,
   //output [DATA_WIDTH-1:0] rdata2,
-  output invalid_csr_access
+  output reg invalid_csr_access
 );
   //reg [DATA_WIDTH-1:0] rf[2**ADDR_WIDTH-1:0];
   //只需要实现几个CSR寄存器，分别是mstatus、mtvec、mepc、mcause、mcycle...
@@ -38,10 +38,11 @@ module CSR #(
   localparam CSR_MARCHID   = 12'hf12;
 //地址译码，判断是否是有效的CSR寄存器访问
 
-  assign invalid_csr_access = 0;
-
+  assign mtvec_data = mtvec; //mtvec寄存器的值作为pc跳转地址
 
   always @(*) begin //组合逻辑，寄存器读
+    invalid_csr_access = 1'b0; //默认有效访问
+    rdata1 = {DATA_WIDTH{1'b0}}; //默认读出内容
     case (raddr1)
       CSR_MSTATUS: rdata1 = mstatus;
       CSR_MTVEC:   rdata1 = mtvec;
@@ -51,7 +52,7 @@ module CSR #(
       CSR_MCYCLEH: rdata1 = mcycleh;
       CSR_MVENDORID: rdata1 = mvendorid;
       CSR_MARCHID:   rdata1 = marchid;
-      default:     invalid_csr_access = 1; //无效寄存器访问
+      default:     invalid_csr_access = 1'b1; //无效寄存器访问
     endcase
     //写地址检测
     // case(waddr)
@@ -59,9 +60,9 @@ module CSR #(
     //   default: invalid_csr_access = 1; //无效寄存器访问
     // endcase
   end
-  always @(posedge is_ecall) begin
-    mtvec_data <= mtvec; //ecall异常时，读取mtvec寄存器的值作为pc跳转地址
-  end
+ 
+  wire mcycle_carry = (mcycle == 32'hffffffff); //mcycle溢出标志
+
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin//初始化
       mstatus <= 32'h00001800; //默认mstatus寄存器值
@@ -73,21 +74,30 @@ module CSR #(
       mvendorid <= 32'h79737978; //默认mvendorid寄存器值 ysyx
       marchid   <= 32'h18d5749; //默认marchid寄存器值 26040137
     end
-    else if (wen) begin //写入CSR寄存器
-      case(waddr)
-        CSR_MSTATUS: mstatus <= wdata;
-        CSR_MTVEC:   mtvec   <= wdata;
-        CSR_MEPC:    mepc    <= wdata;
-        CSR_MCAUSE:  mcause  <= wdata;
-        CSR_MCYCLE:  mcycle  <= wdata;
-        CSR_MCYCLEH: mcycleh <= wdata;
-        default:     ; // do nothing
-      endcase
+    else begin
+      if (wen) begin //写入CSR寄存器
+        case(waddr)
+          CSR_MSTATUS: mstatus <= wdata;
+          CSR_MTVEC:   mtvec   <= wdata;
+          CSR_MEPC:    mepc    <= wdata;
+          CSR_MCAUSE:  mcause  <= wdata;
+          // CSR_MCYCLE:  mcycle  <= wdata;
+          // CSR_MCYCLEH: mcycleh <= wdata;
+          default:     ; // do nothing
+        endcase
+      end
+      if (is_ecall) begin //ecall异常处理
+        mepc   <= mepc_data;
+        mcause <= mcause_data;
+      end
+      if (wen && waddr == CSR_MCYCLE)
+        mcycle  <= wdata;
+      else
+        mcycle  <= mcycle + 32'h1;
+      if (wen && waddr == CSR_MCYCLEH)
+        mcycleh <= wdata;
+      else if (mcycle_carry)
+        mcycleh <= mcycleh + 32'h1;
     end
-    else if (is_ecall) begin //ecall异常处理
-      mepc   <= mepc_data;
-      mcause <= mcause_data;
-    end
-    {mcycleh,mcycle} <= {mcycleh,mcycle} + 1'b1; //mcycle自增
   end
 endmodule

@@ -5,6 +5,7 @@ module WBU (
     input rst_n,  //低有效复位信号
     input pc_we,  //pc写使能，沿用了logisim设计思路
     input [1:0] pc_wsel,
+    input diff_ifu_valid,
     input [31:0] exu_result,
     input [31:0] imm,
     //pc输出二选一，顺序自加和跳转输入；
@@ -51,11 +52,13 @@ module WBU (
   //localparam CSR_IMMEDIATE  = 2'd1;
   localparam CSR_REG   = 2'd2;
   //localparam CSR_XXX2   = 2'd3;
+  //
+  localparam MCAUSE_ECALL_FROM_M = 32'h0000000b;
   reg [31:0] csr_wdata;
   reg [31:0] pc_wdata;
-  reg [31:0] mepc_data;
+  wire [31:0] mepc_data = pc;
   wire [31:0] mtvec_data;//由CSR模块提供
-  reg [31:0] mcause_data;
+  wire [31:0] mcause_data = MCAUSE_ECALL_FROM_M;
 
   always @(*) begin
     case (gpr_wsel)
@@ -82,11 +85,7 @@ module WBU (
       default:       pc_wdata = pc + 32'h4;
     endcase
   end
-  //异常处理逻辑
-  always @(posedge is_ecall) begin
-    mepc_data <= pc; //默认mepc为当前pc
-    mcause_data <= 32'hb;//m模式环境调用
-  end
+
 
   GPR gpr1 (
       .clk(clk),
@@ -123,6 +122,7 @@ module WBU (
   assign dbg_mcycleh   = csr1.mcycleh;
   assign dbg_mvendorid = csr1.mvendorid;
   assign dbg_marchid   = csr1.marchid;
+
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       pc <= 32'h80000000;
@@ -130,7 +130,12 @@ module WBU (
       if (pc_we) begin
         pc <= pc_wdata;
       end else begin
+        if (diff_ifu_valid) begin
         pc <= pc + 32'h4;
+        end
+        else begin
+          pc <= pc;
+        end
       end
     end
   end

@@ -13,6 +13,7 @@ bool check_watchpoints();
 static constexpr uint64_t MAX_INST_TO_PRINT = 10;
 #define MAX_INST_IN_RINGBUF 16
 #define INST_LOG_SIZE 128
+static constexpr uint64_t MAX_IDLE_CYCLES = 100000;
 uint64_t g_nr_guest_inst = 0;
 static uint64_t g_timer = 0;
 #ifdef CONFIG_ITRACE
@@ -72,48 +73,65 @@ static void trace_instruction(vaddr_t pc, word_t inst) {
 }
 #endif
 
-static void exec_once() {
-  vaddr_t pc = sim_pc();
-  word_t inst = sim_inst();
+static bool exec_once() {
+  if (!sim_debug_commit()) {
+    sim_exec_once();
+    return false;
+  } else {
+    vaddr_t pc = sim_pc();
+    word_t inst = sim_inst();
 #ifdef CONFIG_ITRACE
-  trace_instruction(pc, inst);
+    trace_instruction(pc, inst);
 #endif
-  if (sim_invalid_inst()) {
-    std::fprintf(stderr,
-                 "invalid instruction at pc = " FMT_WORD ", inst = " FMT_WORD
-                 "\n",
-                 pc, inst);
-    set_npc_state(NPC_ABORT, pc, -1);
-    return;
-  }
+    if (sim_invalid_inst()) {
+      std::fprintf(stderr,
+                   "invalid instruction at pc = " FMT_WORD ", inst = " FMT_WORD
+                   "\n",
+                   pc, inst);
+      set_npc_state(NPC_ABORT, pc, -1);
+      return true;
+    }
 
-  sim_exec_once();
-  cpu.pc = sim_pc();
-  cpu.gpr[0] = 0;
-  g_nr_guest_inst++;
+    sim_exec_once();
+    cpu.pc = sim_pc();
+    cpu.gpr[0] = 0;
+    g_nr_guest_inst++;
 
 #ifndef CONFIG_FTRACE
-  (void)inst;
+    (void)inst;
 #endif
 #ifdef CONFIG_FTRACE
-  ftrace_trace(pc, cpu.pc, inst);
+    ftrace_trace(pc, cpu.pc, inst);
 #endif
-  difftest_step(pc, cpu.pc);
+    difftest_step(pc, cpu.pc);
 #ifdef CONFIG_WATCHPOINT
-  if (npc_state.state == NPC_RUNNING && check_watchpoints()) {
-    npc_state.state = NPC_STOP;
-  }
+    if (npc_state.state == NPC_RUNNING && check_watchpoints()) {
+      npc_state.state = NPC_STOP;
+    }
 #endif
-  if (npc_state.state == NPC_RUNNING) {
+    if (npc_state.state == NPC_RUNNING) {
 #ifdef CONFIG_DEVICE
-    device_update();
+      device_update();
 #endif
+    }
+    return true;
   }
 }
 
 static void execute(uint64_t n) {
-  while (n-- > 0 && npc_state.state == NPC_RUNNING && !sim_finished()) {
-    exec_once();
+  uint64_t idle_cycles = 0;
+  while (n > 0 && npc_state.state == NPC_RUNNING && !sim_finished()) {
+    if (exec_once()) {
+      n--;
+      idle_cycles = 0;
+    } else if (++idle_cycles > MAX_IDLE_CYCLES) {
+      std::fprintf(stderr,
+                   "no instruction committed in %" PRIu64
+                   " cycles, possible bus deadlock at pc = " FMT_WORD "\n",
+                   idle_cycles, cpu.pc);
+      set_npc_state(NPC_ABORT, cpu.pc, -1);
+      return;
+    }
   }
   if (sim_finished() && npc_state.state == NPC_RUNNING) {
     set_npc_state(NPC_ABORT, cpu.pc, -1);

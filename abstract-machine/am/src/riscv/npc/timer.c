@@ -6,8 +6,9 @@ void __am_timer_init() {
 }
 
 void __am_timer_uptime(AM_TIMER_UPTIME_T *uptime) {
-  uint64_t us_lo = *(volatile uint32_t *)RTC_ADDR;
+  // Reading the high word refreshes both words in the NPC RTC device.
   uint64_t us_hi = *(volatile uint32_t *)(RTC_ADDR + 4);
+  uint64_t us_lo = *(volatile uint32_t *)RTC_ADDR;
   uptime->us = (us_hi << 32) | us_lo;
 }
 

@@ -1,5 +1,7 @@
 //EXU(EXecution Unit): 负责根据控制信号控制ALU, 对数据进行计算
 module EXU (
+    // input clk,
+    // input idu_valid,
     input [31:0] rs1,
     input [31:0] rs2,
     input [31:0] imm,

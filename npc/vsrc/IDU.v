@@ -1,6 +1,8 @@
 //负责对当前指令进行译码, 准备执行阶段需要使用的数据和控制信号
 module IDU (
     input [31:0] inst,
+    //input clk,
+    //input ifu_valid,
     output reg [4:0] rs1,
     output reg [4:0] rs2,
     output reg [4:0] rd,
@@ -44,6 +46,7 @@ module IDU (
     output reg [1:0] mem_wbhw,
     output reg isign,  //表示扩展时是否视为有符号数；
     output reg mem_valid,  //表示访存操作是否有效，防止在访存阶段出现无效的访存操作
+    //output reg idu_valid,
     //ebreak信号
     output reg is_ebreak,
     output reg is_ecall
@@ -537,4 +540,6 @@ module IDU (
     end
 `endif
   end
+
+
 endmodule

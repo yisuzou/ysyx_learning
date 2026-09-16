@@ -47,14 +47,15 @@ void sim_reset(int cycles) {
     eval_once();
   }
   dut.rst_n = 1;
+  dut.clk = 0;
   eval_once();
   cpu.pc = sim_pc();
 }
 
 void sim_exec_once() {
-  dut.clk = 0;
-  eval_once();
   dut.clk = 1;
+  eval_once();
+  dut.clk = 0;
   eval_once();
 }
 
@@ -75,6 +76,7 @@ vaddr_t sim_pc() { return dut.debug_pc; }
 word_t sim_inst() { return dut.debug_inst; }
 bool sim_invalid_inst() { return dut.invalid_inst; }
 bool sim_finished() { return Verilated::gotFinish(); }
+bool sim_debug_commit() { return dut.diff_ifu_valid; }
 
 word_t sim_csr(int id) {
   switch (id) {
