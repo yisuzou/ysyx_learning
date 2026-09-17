@@ -1,6 +1,7 @@
 // Pass the original byte address and access size to DPI so an access may span
 // two aligned words.
 module LSU (
+    input clk,
     input rst_n,
     input [1:0] mem_rbhw,
     input [31:0] mem_addr,
@@ -50,7 +51,18 @@ module LSU (
 
   assign mem_rlen = mem_len(mem_rbhw);
   assign mem_wlen = mem_len(mem_wbhw);
-  assign lsu_reqValid = lsu_respValid==1'b1 ? 1'b0 : rst_n && mem_valid;
+
+  // LFSR 驱动的随机延迟：有访存请求时持续运行，ready 脉冲触发 lsu_reqValid
+  wire delay_start;
+  wire delay_ready;
+  random_delay lsu_delay (
+      .clk(clk), .rst_n(rst_n),
+      .req(rst_n && mem_valid && !lsu_respValid),
+      .start(delay_start),
+      .ready(delay_ready)
+  );
+
+  assign lsu_reqValid = lsu_respValid ? 1'b0 : rst_n && mem_valid && delay_ready;
   always @(*) begin
     mem_rdata_r = 32'b0;
     if (rst_n && mem_valid) begin

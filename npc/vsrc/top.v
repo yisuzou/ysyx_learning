@@ -176,11 +176,12 @@ module top (
       .dbg_marchid(debug_marchid)
   );
   LSU lsu1 (
+      .clk(clk),
       .rst_n(rst_n),
       .mem_rbhw(mem_rbhw),  //由译码IDU给出
       .mem_addr(exu_result),  //由EXU给出
       .mem_valid(mem_valid),  //IDU给出
-      .wen(mem_wen&&lsu_reqValid),  //IDU给出
+      .wen(mem_wen),  //IDU给出
       .mem_wbhw(mem_wbhw),  //由译码IDU给出
       .mem_wdata_raw(Rrs2),  //由GPR给出
       .isign(isign),  //idu
@@ -207,6 +208,7 @@ module top (
 
   MEM mem1 (
       .clk(clk),
+      .rst_n(rst_n),
       // IFU bus
       .ifu_raddr(ifu_raddr),
       .ifu_reqValid(ifu_reqValid),

@@ -15,7 +15,15 @@ module IFU (
   localparam WAIT = 1'b1; //等待后级消费返回数据
 //内部信号声明
 reg next_state;
-
+// LFSR 驱动的随机延迟：IFU 处于 IDLE 时持续运行，ready 脉冲触发取指请求
+wire delay_start;
+wire delay_ready;
+random_delay ifu_delay (
+    .clk(clk), .rst_n(rst_n),
+    .req(ifu_valid == IDLE),
+    .start(delay_start),
+    .ready(delay_ready)
+);
 //当前状态转移条件，仅依赖时序，一周期取指，一周期等待后级消费返回数据
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -27,7 +35,7 @@ reg next_state;
 //预留组合跳转
 
 assign ifu_raddr = pc; //当前周期发出地址请求，下一周期等待后级消费返回数据
-assign ifu_reqValid = ifu_respValid ? 1'b0 : rst_n && (ifu_valid == IDLE);
+assign ifu_reqValid = ifu_respValid ? 1'b0 : rst_n && (ifu_valid == IDLE) && delay_ready;
 //状态机下的输出逻辑，组合逻辑，当前状态决定下一状态和输出
 always @(*) begin
     case (ifu_valid)
@@ -38,7 +46,7 @@ always @(*) begin
         end
         else begin
           inst = 32'h13; //当前周期没有数据返回
-          next_state = WAIT; //下一周期进入等待状态
+          next_state = IDLE; //下一周期进入等待状态
         end
       end
       WAIT: begin

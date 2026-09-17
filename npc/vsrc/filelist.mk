@@ -1,6 +1,6 @@
 VSRCS-y += vsrc/top.v
 VSRCS-y += vsrc/IFU.v vsrc/IDU.v vsrc/EXU.v vsrc/BranchUnit.v
-VSRCS-y += vsrc/LSU.v vsrc/WBU.v vsrc/CSR.v vsrc/mem.v
+VSRCS-y += vsrc/LSU.v vsrc/WBU.v vsrc/CSR.v vsrc/MEM.v vsrc/random_delay.v
 ifeq ($(CONFIG_RVE),y)
 VSRCS-y += vsrc/gpr/rv32e/GPR.v
 else
