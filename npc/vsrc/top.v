@@ -32,7 +32,7 @@ module top (
     .rst_n(rst_n),
     //.mem_ready(mem_ready^mem_rflag),
     .mem_valid(mem_valid),
-    .memfinish(lsu_respValid),
+    .memfinish(diff_ifu_valid),
     //.lsu_reqValid(lsu_reqValid),
     .pc(pc),
     .ifu_rdata(inst),
@@ -40,6 +40,8 @@ module top (
     .inst(ifu_inst),
     .ifu_valid(ifu_valid),
     .ifu_reqValid(ifu_reqValid),
+    .ifu_respReady(ifu_respReady),
+    .ifu_reqReady(ifu_reqReady),
     .ifu_respValid(ifu_respValid)
   );
   wire [31:0] ifu_raddr;
@@ -47,7 +49,9 @@ module top (
   wire ifu_valid;
   wire ifu_reqValid;
   wire ifu_respValid;
-  assign diff_ifu_valid = mem_valid ? ifu_valid && lsu_respValid : ifu_valid;
+  wire ifu_respReady;
+  wire ifu_reqReady;
+  assign diff_ifu_valid = mem_valid ? ifu_valid && lsu_respValid && lsu_respReady : ifu_valid;
   //IFU end
   wire [4:0] rs1;
   wire [4:0] rs2;
@@ -193,6 +197,8 @@ module top (
       .lsu_wmask(lsu_wmask),
       .lsu_rlen(lsu_rlen),
       .lsu_respValid(lsu_respValid),
+      .lsu_respReady(lsu_respReady),
+      .lsu_reqReady(lsu_reqReady),
       .lsu_reqValid(lsu_reqValid),
       .lsu_rdata(lsu_rdata)
   );
@@ -203,6 +209,8 @@ module top (
   wire [7:0] lsu_wmask;
   wire [7:0] lsu_rlen;
   wire lsu_reqValid;
+  wire lsu_respReady;
+  wire lsu_reqReady;
   wire lsu_respValid;
   wire lsu_wen;
 
@@ -214,6 +222,8 @@ module top (
       .ifu_reqValid(ifu_reqValid),
       .ifu_respValid(ifu_respValid),
       .ifu_rdata(inst),
+      .ifu_reqReady(ifu_reqReady),
+      .ifu_respReady(ifu_respReady),
       // LSU bus
       .lsu_addr(lsu_addr),
       .lsu_wen(lsu_wen),
@@ -221,6 +231,8 @@ module top (
       .lsu_wmask(lsu_wmask),
       .lsu_rlen(lsu_rlen),
       .lsu_reqValid(lsu_reqValid),
+      .lsu_reqReady(lsu_reqReady),
+      .lsu_respReady(lsu_respReady),
       .lsu_respValid(lsu_respValid),
       .lsu_rdata(lsu_rdata)
   );

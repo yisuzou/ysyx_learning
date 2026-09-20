@@ -18,6 +18,9 @@ sim: $(BINARY)
 		(echo "Usage: make sim IMG=<image> [ELF=<elf>] [ARGS=...]" && exit 1)
 	$(NPC_EXEC)
 
+wave:
+	gtkwave -7 build/wave.fst config.gtkw
+
 run: sim
 
 .PHONY: sim run
