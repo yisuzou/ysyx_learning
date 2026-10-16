@@ -114,10 +114,65 @@ allocate control/framebuffer storage with `new_space()`, register it with
 `add_mmio_map()`, call `init_vga()` from `init_device()`, and call
 `vga_update_screen()` from `device_update()`.
 
-Instruction fetch uses `pmem_ifetch()` and cannot access devices. The
-single-cycle LSU performs each data read once on the falling edge and commits on
-the rising edge, so MMIO callbacks no longer depend on a host-side
-`side_effect` switch.
+Instruction fetch uses `pmem_ifetch()` and cannot access devices. MEM executes
+accepted AXI transactions once and holds responses until handshake; stalls do
+not repeat MMIO callbacks. Serial writes remain byte accesses and RTC reads
+remain aligned 32-bit accesses.
+
+## AXI4-Lite
+
+IFU and LSU are 32-bit AXI4-Lite masters connected through `AXIArbiter` to a
+single MEM slave. The read arbiter selects a master before forwarding AR and
+holds ownership until the R handshake. Simultaneous requests use round-robin
+priority, initially favoring IFU. LSU is the only writer, so AW/W/B pass through
+independently of read arbitration. All interfaces currently use single beats;
+IDs, bursts, and multiple outstanding transactions are future extensions.
+
+IFU completes AR/R in IDLE, latches the instruction, then enters WAIT for
+execution. It issues no new fetch while executing; its AWVALID, WVALID, and
+BREADY outputs are zero. LSU latches a CPU request once, completes independent
+AW/W handshakes for stores, and holds its result and `lsu_done` until the CPU
+commits. MEM independently caches AW and W and writes only after both arrive.
+R/B responses remain valid and stable under backpressure.
+
+AXI-Lite reads return an aligned 32-bit word. LSU extracts byte/halfword loads
+and applies sign extension; cross-word RAM accesses use two ordered single-beat
+transactions. Stores shift data into byte lanes and generate 4-bit WSTRB.
+Cross-word MMIO accesses and out-of-bounds split RAM accesses are rejected before
+the first transaction. A failed second write beat does not roll back an already
+completed first beat.
+
+PC, GPR, CSR, DPI register mirroring, and ebreak use a common commit gate.
+`debug_bus_error`, `debug_bus_error_addr`, `debug_bus_error_resp`, and
+`debug_bus_error_op` report sticky IFU/LSU faults; operation values 0/1/2 mean
+fetch/load/store. The host checks faults before commit, reports PC/address/RESP,
+and aborts without retiring the failing instruction. Fault recovery requires
+reset; RISC-V access-fault traps are not implemented.
+
+RAM and current serial/RTC decode parameters are passed from Kconfig by the
+Verilator build rules. `top.RANDOM_DELAY` defaults to 1; override it to 0 when
+elaborating the design for a deterministic run.
+The synthesizable state machines contain no DPI calls; MEM's storage backend
+and top's debug callbacks are simulation-only and excluded under `SYNTHESIS`.
+
+Run protocol tests with Icarus Verilog, including delayed/undelayed LSU requests,
+all access sizes/offsets, AW/W ordering, split faults, resets, round-robin reads,
+and response backpressure:
+
+```sh
+make -C npc/tests
+```
+
+After building NPC, run integrated serial/RTC/CSR/trap and bus-error checks
+with the default RAM/MMIO configuration and `riscv64-unknown-elf` tools:
+
+```sh
+make -C npc/tests soc-test
+make -C am-kernels/tests/cpu-tests ARCH=riscv32e-npc run
+```
+
+The standalone test artifacts go to `/tmp/npc-axi-tests` and
+`/tmp/npc-axi-soc`, outside the production source lists.
 
 ## RV32E compatibility
 
@@ -137,7 +192,8 @@ If `CONFIG_RVE` is disabled, NPC returns to the `32 GPRs + PC` layout. NPC and
 the selected reference must always use the same setting; mixing the 17-word and
 33-word ABIs misplaces `pc` and can overrun the smaller state object.
 
-For a later multi-cycle or pipelined core, replace the assumption that one
-`sim_exec_once()` retires one instruction with an explicit commit interface
-(`valid`, `pc`, `next_pc`, register writeback, and trap information). Difftest,
-watchpoints, statistics, and `device_update()` should run only on commit.
+`sim_exec_once()` advances one clock cycle. The host samples `diff_ifu_valid`
+before the committing edge, and runs difftest, watchpoints, statistics, and
+`device_update()` only for completed instructions. A future pipelined core
+should extend this interface with explicit committed PC, next PC, register
+writeback, and trap information.

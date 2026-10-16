@@ -1,117 +1,327 @@
+`ifndef SYNTHESIS
 import "DPI-C" function int pmem_ifetch(input int raddr);
-import "DPI-C" function int pmem_read(
-    input int raddr,
-    input byte rlen
-);
+import "DPI-C" function int pmem_read(input int raddr, input byte rlen);
 import "DPI-C" function void pmem_write(
-    input int  waddr,
-    input int  wdata,
-    input byte wlen
+    input int waddr, input int wdata, input byte wlen
 );
+`endif
 
-module MEM (
+// 32-bit AXI4-Lite slave: one outstanding read and one outstanding write.
+// AXI control is synthesizable; DPI supplies the simulation-only memory.
+// Future AXI4 bursts/IDs belong at this slave boundary, not in the DPI API.
+module MEM #(
+    parameter RANDOM_DELAY = 1,
+    // Match NPC's Kconfig values when connecting this module to top.v.
+    parameter [31:0] PMEM_BASE = 32'h80000000,
+    parameter [31:0] PMEM_SIZE = 32'h08000000,
+    parameter HAS_SERIAL = 1,
+    parameter HAS_TIMER = 1,
+    parameter [31:0] SERIAL_MMIO = 32'h10000000,
+    parameter [31:0] RTC_MMIO = 32'h10000048
+) (
     input         clk,
     input         rst_n,
-    // IFU bus (read-only)
-    input  [31:0] ifu_raddr,
-    input         ifu_reqValid,
-    input         ifu_respReady,
-    output    reg ifu_reqReady,
-    output        ifu_respValid,
-    output [31:0] ifu_rdata,
-    // LSU bus (read/write)
-    input  [31:0] lsu_addr,
-    input         lsu_wen,
-    input  [31:0] lsu_wdata,
-    input  [7:0]  lsu_wmask,
-    input  [7:0]  lsu_rlen,
-    input         lsu_reqValid,
-    input         lsu_respReady,
-    output    reg lsu_reqReady,
-    output        lsu_respValid,
-    output [31:0] lsu_rdata
+    // Read address channel
+    input  [31:0] s_axi_araddr,
+    input  [ 2:0] s_axi_arprot,
+    input         s_axi_arvalid,
+    output        s_axi_arready,
+    // Read data channel
+    output reg [31:0] s_axi_rdata,
+    output reg [ 1:0] s_axi_rresp,
+    output        s_axi_rvalid,
+    input         s_axi_rready,
+    // Write address channel
+    input  [31:0] s_axi_awaddr,
+    input  [ 2:0] s_axi_awprot,
+    input         s_axi_awvalid,
+    output        s_axi_awready,
+    // Write data channel
+    input  [31:0] s_axi_wdata,
+    input  [ 3:0] s_axi_wstrb,
+    input         s_axi_wvalid,
+    output        s_axi_wready,
+    // Write response channel
+    output reg [ 1:0] s_axi_bresp,
+    output        s_axi_bvalid,
+    input         s_axi_bready
 );
+  localparam [1:0] RESP_OKAY   = 2'b00;
+  localparam [1:0] RESP_SLVERR = 2'b10;
+  localparam [1:0] RESP_DECERR = 2'b11;
 
-  wire mem_rflag = |lsu_rlen;
+  // Read FSM (AR/R):
+  // State      Action                         Next state
+  // RD_IDLE    Accept and latch AR             ar_fire -> RD_ACCESS
+  // RD_ACCESS  Read DPI once; latch RDATA/RESP  RD_DELAY
+  // RD_DELAY   Wait for response delay         r_delay_done -> RD_RESP
+  // RD_RESP    Hold RVALID/RDATA/RRESP          r_fire -> RD_IDLE
+  // Write FSM (AW/W/B):
+  // State      Action                         Next state
+  // WR_COLLECT Cache AW and W independently    both cached -> WR_ACCESS
+  // WR_ACCESS  Write DPI once; latch BRESP      WR_DELAY
+  // WR_DELAY   Wait for response delay         b_delay_done -> WR_RESP
+  // WR_RESP    Hold BVALID/BRESP                b_fire -> WR_COLLECT
+  // All unlisted conditions hold the current state. Reset discards requests
+  // and responses, but cannot undo a write already performed in WR_ACCESS.
+  localparam [1:0] RD_IDLE   = 2'd0;
+  localparam [1:0] RD_ACCESS = 2'd1;
+  localparam [1:0] RD_DELAY  = 2'd2;
+  localparam [1:0] RD_RESP   = 2'd3;
+  localparam [1:0] WR_COLLECT = 2'd0;
+  localparam [1:0] WR_ACCESS  = 2'd1;
+  localparam [1:0] WR_DELAY   = 2'd2;
+  localparam [1:0] WR_RESP    = 2'd3;
 
-  // IFU 通道：电平延迟
-  wire ifu_gated;
-  random_delay ifu_delay (
-    .clk(clk), .rst_n(rst_n),
-    .req(ifu_access_done),
-    .gated(ifu_gated)
-  );
-  assign ifu_respValid = ifu_gated;
+  reg [1:0] rd_state, rd_next_state;
+  reg [1:0] wr_state, wr_next_state;
+  reg [31:0] araddr_r, awaddr_r, wdata_r;
+  reg [2:0] arprot_r, awprot_r;
+  reg [3:0] wstrb_r;
+  reg aw_pending, w_pending;
 
-  // IFU 取指：请求到达后执行一次，access_done 保证不重复
-  reg ifu_access_done;
-  reg ifu_handshake_success;
-  reg [31:0] ifu_rdata_r;
-  always @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      ifu_access_done <= 1'b0;
-      ifu_rdata_r     <= 32'b0;
-      ifu_reqReady    <= 1'b0;
-      ifu_handshake_success <= 1'b0;
+  // Full-width AXI-Lite reads return the addressed, aligned 32-bit word.
+  // WSTRB selects lanes relative to the same aligned word for writes.
+  wire [31:0] rd_word_addr = {araddr_r[31:2], 2'b00};
+  wire [31:0] wr_word_addr = {awaddr_r[31:2], 2'b00};
+  // This backend distinguishes instruction/data accesses via ARPROT[2].
+  // Privilege/security checks and AWPROT policy are not implemented.
+  wire unused_attributes = &{1'b0, arprot_r[1:0], awprot_r,
+                            araddr_r[1:0], awaddr_r[1:0]};
+`ifdef SYNTHESIS
+  // No hardware storage backend is supplied by this simulation MEM module.
+  wire unused_write_data = &{1'b0, wdata_r};
+`endif
+
+  wire ar_delay_done, aw_delay_done, w_delay_done;
+  wire r_delay_done, b_delay_done;
+  wire ar_slot_free = (rd_state == RD_IDLE);
+  wire aw_slot_free = (wr_state == WR_COLLECT) && !aw_pending;
+  wire w_slot_free = (wr_state == WR_COLLECT) && !w_pending;
+
+  // Delay READY before acceptance, and delay responses before asserting VALID.
+  // Once a response becomes valid, delay logic can no longer withdraw it.
+  generate
+    if (RANDOM_DELAY != 0) begin : g_random_delay
+      random_delay ar_delay (
+          .clk(clk), .rst_n(rst_n), .req(ar_slot_free), .gated(ar_delay_done)
+      );
+      random_delay aw_delay (
+          .clk(clk), .rst_n(rst_n), .req(aw_slot_free), .gated(aw_delay_done)
+      );
+      random_delay w_delay (
+          .clk(clk), .rst_n(rst_n), .req(w_slot_free), .gated(w_delay_done)
+      );
+      random_delay r_delay (
+          .clk(clk), .rst_n(rst_n),
+          .req(rd_state == RD_DELAY), .gated(r_delay_done)
+      );
+      random_delay b_delay (
+          .clk(clk), .rst_n(rst_n),
+          .req(wr_state == WR_DELAY), .gated(b_delay_done)
+      );
+    end else begin : g_no_delay
+      assign ar_delay_done = 1'b1;
+      assign aw_delay_done = 1'b1;
+      assign w_delay_done = 1'b1;
+      assign r_delay_done = 1'b1;
+      assign b_delay_done = 1'b1;
     end
-    else begin
-      if (ifu_reqValid) begin
-        ifu_reqReady <= ifu_reqReady ? 1'b0 : 1'b1;
-        if (ifu_reqReady) begin
-          ifu_handshake_success <= 1'b1;
+  endgenerate
+
+  // No combinational dependency on master VALID/READY inputs.
+  assign s_axi_arready = rst_n && ar_slot_free && ar_delay_done;
+  assign s_axi_awready = rst_n && aw_slot_free && aw_delay_done;
+  assign s_axi_wready  = rst_n && w_slot_free && w_delay_done;
+  assign s_axi_rvalid  = rst_n && (rd_state == RD_RESP);
+  assign s_axi_bvalid  = rst_n && (wr_state == WR_RESP);
+
+  wire ar_fire = s_axi_arvalid && s_axi_arready;
+  wire aw_fire = s_axi_awvalid && s_axi_awready;
+  wire w_fire  = s_axi_wvalid  && s_axi_wready;
+  wire r_fire  = s_axi_rvalid  && s_axi_rready;
+  wire b_fire  = s_axi_bvalid  && s_axi_bready;
+
+  // Validate before DPI so malformed MMIO cannot trigger host assertions or
+  // partial side effects. The decoder covers NPC's current RAM/serial/RTC map.
+  function in_ram_word;
+    input [31:0] addr;
+    begin
+      in_ram_word = (PMEM_SIZE >= 32'd4) && (addr >= PMEM_BASE) &&
+                    ((addr - PMEM_BASE) <= (PMEM_SIZE - 32'd4));
+    end
+  endfunction
+
+  function in_serial_word;
+    input [31:0] addr;
+    begin
+      in_serial_word = (HAS_SERIAL != 0) &&
+                       ((addr == SERIAL_MMIO) || (addr == SERIAL_MMIO + 32'd4));
+    end
+  endfunction
+
+  function in_rtc_word;
+    input [31:0] addr;
+    begin
+      in_rtc_word = (HAS_TIMER != 0) &&
+                    ((addr == RTC_MMIO) || (addr == RTC_MMIO + 32'd4));
+    end
+  endfunction
+
+  function [1:0] read_resp;
+    input [31:0] addr;
+    input instruction;
+    begin
+      if (in_ram_word(addr))
+        read_resp = RESP_OKAY;
+      else if (instruction)
+        read_resp = RESP_DECERR; // Instruction fetch never touches MMIO.
+      else if (in_rtc_word(addr))
+        read_resp = RESP_OKAY;
+      else if (in_serial_word(addr))
+        read_resp = RESP_SLVERR; // Serial supports writes only.
+      else
+        read_resp = RESP_DECERR;
+    end
+  endfunction
+
+  function [1:0] write_resp;
+    input [31:0] addr;
+    input [3:0] strb;
+    begin
+      if (strb == 4'b0000)
+        write_resp = RESP_OKAY; // A zero-strobe write is a no-op.
+      else if (in_ram_word(addr))
+        write_resp = RESP_OKAY;
+      else if (in_serial_word(addr))
+        write_resp = ((addr == SERIAL_MMIO) && (strb == 4'b0001)) ?
+                     RESP_OKAY : RESP_SLVERR;
+      else if (in_rtc_word(addr))
+        write_resp = RESP_SLVERR; // RTC supports reads only.
+      else
+        write_resp = RESP_DECERR;
+    end
+  endfunction
+
+  wire [1:0] rd_access_resp = read_resp(rd_word_addr, arprot_r[2]);
+  wire [1:0] wr_access_resp = write_resp(wr_word_addr, wstrb_r);
+
+`ifndef SYNTHESIS
+  // Preserve the existing DPI API (length, not strobes). Common contiguous
+  // masks use one call; other masks use a fixed lane loop. This task executes
+  // once per AXI write, regardless of response delay or BREADY backpressure.
+  task dpi_write_word;
+    input [31:0] addr;
+    input [31:0] data;
+    input [3:0] strb;
+    integer lane;
+    begin
+      case (strb)
+        4'b0000: begin end
+        4'b1111: pmem_write(addr, data, 8'd4);
+        4'b0011: pmem_write(addr, data, 8'd2);
+        4'b0110: pmem_write(addr + 32'd1, data >> 8, 8'd2);
+        4'b1100: pmem_write(addr + 32'd2, data >> 16, 8'd2);
+        default: begin
+          for (lane = 0; lane < 4; lane = lane + 1) begin
+            if (strb[lane])
+              pmem_write(addr + lane, data >> (lane * 8), 8'd1);
+          end
         end
-      end
-      if (ifu_handshake_success && !ifu_access_done) begin
-          ifu_rdata_r     <= pmem_ifetch(ifu_raddr);
-          ifu_access_done <= 1'b1; //代表访存完成，这个信号决定了respValid的输出
-      end
-      if (ifu_respValid && ifu_respReady) begin
-        ifu_handshake_success <= 1'b0; //握手信号释放
-        ifu_access_done <= 1'b0;
-      end
+      endcase
     end
+  endtask
+`endif
+
+  // Next-state logic. AW/W completeness includes handshakes on this edge;
+  // WR_ACCESS starts only after both payload registers have been updated.
+  always @(*) begin
+    rd_next_state = rd_state;
+    case (rd_state)
+      RD_IDLE:   if (ar_fire) rd_next_state = RD_ACCESS;
+      RD_ACCESS: rd_next_state = RD_DELAY;
+      RD_DELAY:  if (r_delay_done) rd_next_state = RD_RESP;
+      RD_RESP:   if (r_fire) rd_next_state = RD_IDLE;
+      default:   rd_next_state = RD_IDLE;
+    endcase
+
+    wr_next_state = wr_state;
+    case (wr_state)
+      WR_COLLECT: begin
+        if ((aw_pending || aw_fire) && (w_pending || w_fire))
+          wr_next_state = WR_ACCESS;
+      end
+      WR_ACCESS: wr_next_state = WR_DELAY;
+      WR_DELAY:  if (b_delay_done) wr_next_state = WR_RESP;
+      WR_RESP:   if (b_fire) wr_next_state = WR_COLLECT;
+      default:   wr_next_state = WR_COLLECT;
+    endcase
   end
 
-  assign ifu_rdata = ifu_rdata_r;
-
-  // LSU 通道：电平延迟
-  wire lsu_gated;
-  random_delay lsu_delay (
-    .clk(clk), .rst_n(rst_n),
-    .req(lsu_access_done),
-    .gated(lsu_gated)
-  );
-  assign lsu_respValid = lsu_gated;
-
-  // LSU 读写：请求到达后执行一次，access_done 保证不重复
-  reg lsu_access_done;
-  reg lsu_handshake_success;
-  reg [31:0] lsu_rdata_r;
+  // Read request registers and response registers have separate enables.
+  // RDATA/RRESP are written only in RD_ACCESS, never during RD_RESP.
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      lsu_access_done <= 1'b0;
-      lsu_rdata_r     <= 32'b0;
-      lsu_reqReady    <= 1'b0;
-      lsu_handshake_success <= 1'b0;
+      rd_state <= RD_IDLE;
+      araddr_r <= 32'b0;
+      arprot_r <= 3'b0;
+      s_axi_rdata <= 32'b0;
+      s_axi_rresp <= RESP_OKAY;
     end else begin
-      if (lsu_reqValid) begin
-        lsu_reqReady <= lsu_reqReady ? 1'b0 : 1'b1; //如果要引入延迟，将1‘b1修改为延迟后信号；
-        if (lsu_reqReady) begin
-          lsu_handshake_success <= 1'b1;
+      rd_state <= rd_next_state;
+      if (ar_fire) begin//把AR通道的地址和保护属性寄存起来，供后续的读操作使用
+        araddr_r <= s_axi_araddr;
+        arprot_r <= s_axi_arprot;
+      end
+      if (rd_state == RD_ACCESS) begin
+        s_axi_rdata <= 32'b0;
+        s_axi_rresp <= rd_access_resp;
+`ifndef SYNTHESIS
+        if (rd_access_resp == RESP_OKAY) begin
+          if (arprot_r[2])
+            s_axi_rdata <= pmem_ifetch(rd_word_addr);
+          else
+            s_axi_rdata <= pmem_read(rd_word_addr, 8'd4);
         end
-      end
-      if ( lsu_handshake_success && !lsu_access_done) begin
-        lsu_rdata_r <= (!lsu_wen && mem_rflag) ? pmem_read(lsu_addr, lsu_rlen) : 32'b0;
-        if (lsu_wen)
-          pmem_write(lsu_addr, lsu_wdata, lsu_wmask);
-        lsu_access_done <= 1'b1;
-      end
-      if (lsu_respValid && lsu_respReady) begin
-        lsu_handshake_success <=1'b0; //访存结束
-        lsu_access_done <= 1'b0; //此次访问完毕
+`endif
       end
     end
   end
-  assign lsu_rdata = lsu_rdata_r;
 
+  // AW and W are independent one-entry buffers, released together after B.
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      wr_state <= WR_COLLECT;
+      aw_pending <= 1'b0;
+      w_pending <= 1'b0;
+      awaddr_r <= 32'b0;
+      awprot_r <= 3'b0;
+      wdata_r <= 32'b0;
+      wstrb_r <= 4'b0;
+      s_axi_bresp <= RESP_OKAY;
+    end else begin
+      wr_state <= wr_next_state;
+      if (aw_fire) begin
+        awaddr_r <= s_axi_awaddr;
+        awprot_r <= s_axi_awprot;
+        aw_pending <= 1'b1;
+      end
+      if (w_fire) begin
+        wdata_r <= s_axi_wdata;
+        wstrb_r <= s_axi_wstrb;
+        w_pending <= 1'b1;
+      end
+      if (wr_state == WR_ACCESS) begin
+        s_axi_bresp <= wr_access_resp;
+`ifndef SYNTHESIS
+        if (wr_access_resp == RESP_OKAY)
+          dpi_write_word(wr_word_addr, wdata_r, wstrb_r);
+`endif
+      end
+      if (b_fire) begin
+        aw_pending <= 1'b0;
+        w_pending <= 1'b0;
+      end
+    end
+  end
 endmodule

@@ -1,77 +1,179 @@
-module IFU (
-    input clk,
-    input memfinish,
-    input mem_valid,
-    input rst_n,
-    input [31:0] pc,
-    input [31:0] ifu_rdata, //inst_form_mem
-    input ifu_respValid, //确认收到指令，访存完成
-    input ifu_reqReady,
-    output ifu_reqValid, //上一条已执行完毕，可以发出下一条指令请求
-    output reg ifu_respReady,
-    output [31:0] ifu_raddr, //pc
-    output reg [31:0] inst, //实际执行指令
-    output reg ifu_valid//从状态机视角出发，这个也就是state
+// Read-only 32-bit AXI4-Lite master, with one outstanding fetch.
+// IDLE completes the entire AR/R transaction; WAIT holds the executing inst.
+// Memory/DPI access belongs to the slave (MEM), not to this master.
+// Future AXI4 IDs/bursts belong at this master boundary; none are used here.
+module IFU #(
+    parameter RANDOM_DELAY = 1
+) (
+    input         clk,
+    input         rst_n,
+    input  [31:0] pc,
+    input         mem_valid,
+    input         memfinish,
+    output reg [31:0] inst,
+    output        ifu_valid,
+    // Sticky fetch fault: consumed response is not an executable instruction.
+    // These outputs remain valid until reset when ifu_error is asserted.
+    output reg        ifu_error,
+    output reg [ 1:0] ifu_error_resp,
+    output     [31:0] ifu_error_addr,
+    // Read address channel
+    output reg [31:0] m_axi_araddr,
+    output     [ 2:0] m_axi_arprot,
+    output            m_axi_arvalid,
+    input             m_axi_arready,
+    // Read data channel
+    input  [31:0] m_axi_rdata,
+    input  [ 1:0] m_axi_rresp,
+    input         m_axi_rvalid,
+    output        m_axi_rready,
+    // Unused write address channel
+    output [31:0] m_axi_awaddr,
+    output [ 2:0] m_axi_awprot,
+    output        m_axi_awvalid,
+    input         m_axi_awready,
+    // Unused write data channel
+    output [31:0] m_axi_wdata,
+    output [ 3:0] m_axi_wstrb,
+    output        m_axi_wvalid,
+    input         m_axi_wready,
+    // Unused write response channel
+    input  [ 1:0] m_axi_bresp,
+    input         m_axi_bvalid,
+    output        m_axi_bready
 );
-  localparam IDLE = 1'b0; //发出地址请求
-  localparam WAIT = 1'b1; //等待后级消费返回数据
-//内部信号声明
-reg next_state;
-reg ifu_req_handshake_success;
-// LFSR 驱动的随机延迟：IDLE 且未收到响应时产生延迟后的 reqValid（电平）
-wire delayed_req;
-wire raw_ifu_req = ifu_valid == IDLE;
-random_delay ifu_delay (
-    .clk(clk), .rst_n(rst_n),
-    .req(raw_ifu_req),
-    .gated(delayed_req)
-);
-//当前状态转移条件，仅依赖时序，一周期取指，一周期等待后级消费返回数据
+  localparam IDLE = 1'b0;
+  localparam WAIT = 1'b1;
+  localparam [1:0] FETCH_DELAY = 2'd0;
+  localparam [1:0] FETCH_AR    = 2'd1;
+  localparam [1:0] FETCH_R     = 2'd2;
+  localparam [1:0] FETCH_FAULT = 2'd3;
+  localparam [1:0] RESP_OKAY = 2'b00;
+  localparam [31:0] INST_NOP = 32'h00000013;
+
+  // Main/phase state    Action                       Transition
+  // IDLE/FETCH_DELAY    Delay request launch          delay_done -> FETCH_AR
+  //                    Latch PC on launch
+  // IDLE/FETCH_AR       Hold ARVALID and ARADDR        ar_fire -> FETCH_R
+  // IDLE/FETCH_R        Assert RREADY                 r_fire, OKAY -> WAIT
+  //                    Latch returned instruction    r_fire, error -> FETCH_FAULT
+  // IDLE/FETCH_FAULT    Hold sticky fault; no traffic  reset only
+  // WAIT               Hold inst and ifu_valid        !mem_valid || memfinish
+  //                    No AR/R activity               -> IDLE/FETCH_DELAY
+  // AW/W/B have no FSM: this master never writes or accepts write responses.
+  // Unlisted conditions hold state. Reset discards any pending fetch/inst.
+  reg state, next_state;
+  reg [1:0] fetch_state, fetch_next_state;
+
+  wire fetch_delay_req = (state == IDLE) && (fetch_state == FETCH_DELAY);
+  wire fetch_delay_done;
+  generate
+    if (RANDOM_DELAY != 0) begin : g_random_delay
+      random_delay ifu_delay (
+          .clk(clk), .rst_n(rst_n),
+          .req(fetch_delay_req), .gated(fetch_delay_done)
+      );
+    end else begin : g_no_delay
+      assign fetch_delay_done = 1'b1;
+    end
+  endgenerate
+
+  // ARPROT[2:0] = instruction / secure / privileged (M-mode).
+  assign m_axi_arprot = 3'b101;
+  // VALID depends only on registered state, never on ARREADY or delay gating.
+  // Once launched, ARVALID and its latched payload persist until handshake.
+  assign m_axi_arvalid = rst_n && (state == IDLE) && (fetch_state == FETCH_AR);
+  // RREADY is asserted while expecting a response, independently of RVALID.
+  assign m_axi_rready = rst_n && (state == IDLE) && (fetch_state == FETCH_R);
+  assign ifu_valid = rst_n && (state == WAIT);
+  assign ifu_error_addr = m_axi_araddr;
+  // IFU does not write, so tie off unused write channels to avoid Xs in simulation.
+  assign m_axi_awaddr  = 32'b0;
+  assign m_axi_awprot  = 3'b0;
+  assign m_axi_awvalid = 1'b0;
+  assign m_axi_wdata   = 32'b0;
+  assign m_axi_wstrb   = 4'b0;
+  assign m_axi_wvalid  = 1'b0;
+  assign m_axi_bready  = 1'b0;
+  wire unused_write_inputs = &{1'b0, m_axi_awready, m_axi_wready,
+                               m_axi_bvalid, m_axi_bresp};
+
+  wire ar_fire = m_axi_arvalid && m_axi_arready; // AR handshake
+  wire r_fire = m_axi_rvalid && m_axi_rready;  // R handshake
+  // Preserve the current execution contract: non-memory instructions execute
+  // in one WAIT cycle, whereas memory instructions wait for completion.
+  wire execute_done = !mem_valid || memfinish;
+  wire fetch_launch = fetch_delay_req && fetch_delay_done;
+
+  // State registers only.
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      ifu_valid <= IDLE;
-      ifu_req_handshake_success <= 1'b0;
+      state <= IDLE;
+      fetch_state <= FETCH_DELAY;
     end else begin
-      ifu_respReady <= ifu_respReady ? 1'b0 : ifu_respValid;
-      if (ifu_reqReady && ifu_reqValid) begin
-        ifu_req_handshake_success <= 1'b1; //握手成功
-      end
-      if (ifu_respReady && ifu_respValid) begin
-        ifu_req_handshake_success <= 1'b0; //释放握手信号
-      end
-      ifu_valid <= next_state;
+      state <= next_state;
+      fetch_state <= fetch_next_state;
     end
   end
-//预留组合跳转
 
-assign ifu_raddr = pc;
-assign ifu_reqValid = ifu_req_handshake_success ? 1'b0 : delayed_req; //握手成功则复位请求信号
-//状态机下的输出逻辑，组合逻辑，当前状态决定下一状态和输出
-always @(*) begin
-    case (ifu_valid)
+  // Combinational next-state logic.
+  always @(*) begin
+    next_state = state;
+    fetch_next_state = fetch_state;
+    case (state)
       IDLE: begin
-        if(ifu_respValid && ifu_respReady)begin
-          inst = ifu_rdata; //后级消费返回数据
-          next_state = WAIT; //正在访问内存，继续等待
-        end
-        else begin
-          inst = 32'h13; //当前周期没有数据返回
-          next_state = IDLE; //下一周期进入等待状态
-        end
+        case (fetch_state)
+          FETCH_DELAY: begin
+            if (fetch_delay_done) fetch_next_state = FETCH_AR;
+          end
+          FETCH_AR: begin
+            if (ar_fire) fetch_next_state = FETCH_R;
+          end
+          FETCH_R: begin
+            if (r_fire) begin
+              if (m_axi_rresp == RESP_OKAY) begin
+                next_state = WAIT;
+                fetch_next_state = FETCH_DELAY;
+              end else begin
+                fetch_next_state = FETCH_FAULT;
+              end
+            end
+          end
+          FETCH_FAULT: begin end
+          default: fetch_next_state = FETCH_DELAY;
+        endcase
       end
       WAIT: begin
-        inst = ifu_rdata; //后级消费返回数据
-        if(mem_valid)begin
-          next_state = memfinish ? IDLE : WAIT ; //正在访问内存，继续等待
-        end
-        else begin
-        next_state = IDLE; //下一周期进入空闲状态，准备发出下一个地址请求
-        end
+        fetch_next_state = FETCH_DELAY;
+        if (execute_done) next_state = IDLE;
       end
       default: begin
-        inst = 32'b0;
         next_state = IDLE;
+        fetch_next_state = FETCH_DELAY;
       end
     endcase
+  end
+
+  // Payload registers only. PC is sampled before ARVALID rises; neither live
+  // PC nor slave RDATA can change an already issued request/executing inst.
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      m_axi_araddr <= 32'b0;
+      inst <= INST_NOP;
+      ifu_error <= 1'b0;
+      ifu_error_resp <= RESP_OKAY;
+    end else begin
+      if (fetch_launch) m_axi_araddr <= pc; //延迟完毕且处于IDLE状态时，发起新的AR请求，锁存PC地址
+      if (r_fire) begin
+        if (m_axi_rresp == RESP_OKAY) begin
+          inst <= m_axi_rdata;
+        end else begin
+          inst <= INST_NOP;
+          ifu_error <= 1'b1;
+          ifu_error_resp <= m_axi_rresp;
+        end
+      end
+      if ((state == WAIT) && execute_done) inst <= INST_NOP;
+    end
   end
 endmodule

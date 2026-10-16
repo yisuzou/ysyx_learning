@@ -74,6 +74,18 @@ static void trace_instruction(vaddr_t pc, word_t inst) {
 #endif
 
 static bool exec_once() {
+  if (sim_bus_error()) {
+    static const char *const operations[] = {"instruction fetch", "load", "store"};
+    unsigned op = sim_bus_error_op();
+    const char *operation =
+        op < static_cast<unsigned>(ARRLEN(operations)) ? operations[op] : "unknown";
+    std::fprintf(stderr,
+                 "AXI4-Lite %s error: pc = " FMT_WORD ", addr = " FMT_PADDR
+                 ", resp = %u\n",
+                 operation, sim_pc(), sim_bus_error_addr(), sim_bus_error_resp());
+    set_npc_state(NPC_ABORT, sim_pc(), -1);
+    return false;
+  }
   if (!sim_debug_commit()) {
     sim_exec_once();
     return false;

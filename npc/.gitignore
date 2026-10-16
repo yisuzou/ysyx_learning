@@ -11,6 +11,11 @@
 !*.cpp
 !.gitignore
 !README.md
+!docs/axi4-lite-design-report.md
+!docs/axi4-lite-architecture.drawio
+!docs/axi4-lite-architecture.svg
+!tests/*.sv
+!tests/*.py
 !configs/
 !configs/*
 build/
