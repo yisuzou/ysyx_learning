@@ -27,6 +27,7 @@ bool sim_finished();
 word_t sim_csr(int id);
 bool sim_debug_commit();
 bool sim_bus_error();
+bool sim_skip_ref();
 paddr_t sim_bus_error_addr();
 unsigned sim_bus_error_resp();
 unsigned sim_bus_error_op();
