@@ -28,7 +28,13 @@ module top #(
     output [31:0] debug_mcycle,
     output [31:0] debug_mcycleh,
     output [31:0] debug_mvendorid,
-    output [31:0] debug_marchid
+    output [31:0] debug_marchid,
+    // Committing instruction accesses a device (not SRAM): host must not
+    // replay it on the difftest reference, only copy the DUT state over.
+    output debug_skip_ref,
+    // UART transmit byte stream (one-cycle tx_valid pulse per byte).
+    output uart_tx_valid,
+    output [7:0] uart_tx_data
 );
   wire [31:0] pc, ifu_inst;
   wire ifu_valid, lsu_done;
@@ -47,10 +53,14 @@ module top #(
   assign diff_ifu_valid = rst_n && ifu_valid && !debug_bus_error &&
                           (!mem_valid || lsu_done);
   wire commit = diff_ifu_valid && !invalid_inst;
+  // Device accesses are decided by the LSU address, like NEMU's mmio skip.
+  // exu_result is stable for the whole instruction, so this is valid at commit.
+  assign debug_skip_ref = mem_valid &&
+                          ((exu_result - PMEM_BASE) >= PMEM_SIZE);
   wire lsu_request = rst_n && ifu_valid && mem_valid && !invalid_inst &&
                      !debug_bus_error;
 
-  // IFU and LSU masters -> round-robin read arbiter -> one MEM slave.
+  // IFU and LSU masters -> round-robin read arbiter -> XBAR -> device slaves.
   wire [31:0] ifu_araddr;
   wire [2:0] ifu_arprot;
   wire ifu_arvalid;
@@ -85,25 +95,26 @@ module top #(
   wire [1:0] lsu_bresp;
   wire lsu_bvalid;
   wire lsu_bready;
-  wire [31:0] axi_mem_araddr;
-  wire [2:0] axi_mem_arprot;
-  wire axi_mem_arvalid;
-  wire axi_mem_arready;
-  wire [31:0] axi_mem_rdata;
-  wire [1:0] axi_mem_rresp;
-  wire axi_mem_rvalid;
-  wire axi_mem_rready;
-  wire [31:0] axi_mem_awaddr;
-  wire [2:0] axi_mem_awprot;
-  wire axi_mem_awvalid;
-  wire axi_mem_awready;
-  wire [31:0] axi_mem_wdata;
-  wire [3:0] axi_mem_wstrb;
-  wire axi_mem_wvalid;
-  wire axi_mem_wready;
-  wire [1:0] axi_mem_bresp;
-  wire axi_mem_bvalid;
-  wire axi_mem_bready;
+  // Arbiter -> XBAR upstream bus.
+  wire [31:0] axi_araddr;
+  wire [2:0] axi_arprot;
+  wire axi_arvalid;
+  wire axi_arready;
+  wire [31:0] axi_rdata;
+  wire [1:0] axi_rresp;
+  wire axi_rvalid;
+  wire axi_rready;
+  wire [31:0] axi_awaddr;
+  wire [2:0] axi_awprot;
+  wire axi_awvalid;
+  wire axi_awready;
+  wire [31:0] axi_wdata;
+  wire [3:0] axi_wstrb;
+  wire axi_wvalid;
+  wire axi_wready;
+  wire [1:0] axi_bresp;
+  wire axi_bvalid;
+  wire axi_bready;
 
   IFU #(
       .RANDOM_DELAY(RANDOM_DELAY)
@@ -334,56 +345,195 @@ module top #(
       .lsu_bresp(lsu_bresp),
       .lsu_bvalid(lsu_bvalid),
       .lsu_bready(lsu_bready),
-      .m_axi_araddr(axi_mem_araddr),
-      .m_axi_arprot(axi_mem_arprot),
-      .m_axi_arvalid(axi_mem_arvalid),
-      .m_axi_arready(axi_mem_arready),
-      .m_axi_rdata(axi_mem_rdata),
-      .m_axi_rresp(axi_mem_rresp),
-      .m_axi_rvalid(axi_mem_rvalid),
-      .m_axi_rready(axi_mem_rready),
-      .m_axi_awaddr(axi_mem_awaddr),
-      .m_axi_awprot(axi_mem_awprot),
-      .m_axi_awvalid(axi_mem_awvalid),
-      .m_axi_awready(axi_mem_awready),
-      .m_axi_wdata(axi_mem_wdata),
-      .m_axi_wstrb(axi_mem_wstrb),
-      .m_axi_wvalid(axi_mem_wvalid),
-      .m_axi_wready(axi_mem_wready),
-      .m_axi_bresp(axi_mem_bresp),
-      .m_axi_bvalid(axi_mem_bvalid),
-      .m_axi_bready(axi_mem_bready)
+      .m_axi_araddr(axi_araddr),
+      .m_axi_arprot(axi_arprot),
+      .m_axi_arvalid(axi_arvalid),
+      .m_axi_arready(axi_arready),
+      .m_axi_rdata(axi_rdata),
+      .m_axi_rresp(axi_rresp),
+      .m_axi_rvalid(axi_rvalid),
+      .m_axi_rready(axi_rready),
+      .m_axi_awaddr(axi_awaddr),
+      .m_axi_awprot(axi_awprot),
+      .m_axi_awvalid(axi_awvalid),
+      .m_axi_awready(axi_awready),
+      .m_axi_wdata(axi_wdata),
+      .m_axi_wstrb(axi_wstrb),
+      .m_axi_wvalid(axi_wvalid),
+      .m_axi_wready(axi_wready),
+      .m_axi_bresp(axi_bresp),
+      .m_axi_bvalid(axi_bvalid),
+      .m_axi_bready(axi_bready)
   );
+  // ---------------------------------------------------------------------
+  // Address map (first matching rule wins; miss -> DECERR from XBAR):
+  //   rule 0  [PMEM_BASE,   +PMEM_SIZE) -> port 0 SRAM (MEM), executable
+  //   rule 1  [SERIAL_MMIO, +8)         -> port 1 UART
+  //   rule 2  [RTC_MMIO,    +8)         -> disabled until CLINT is added
+  // To add CLINT: bump XBAR_SLAVES, add PORT_CLINT, point rule 2 at it,
+  // enable it with HAS_TIMER and instantiate CLINT on the matching slice.
+  // ---------------------------------------------------------------------
+  localparam XBAR_SLAVES = 3;
+  localparam XBAR_RULES = 3;
+  localparam PORT_SRAM = 0;
+  localparam PORT_UART = 1;
+  localparam PORT_CLINT = 2;
+  localparam [XBAR_RULES*32-1:0] XBAR_RULE_BASE = {RTC_MMIO, SERIAL_MMIO, PMEM_BASE};
+  localparam [XBAR_RULES*32-1:0] XBAR_RULE_SIZE = {32'd8, 32'd8, PMEM_SIZE};
+  localparam [XBAR_RULES*8-1:0]  XBAR_RULE_PORT = {8'(PORT_CLINT), 8'(PORT_UART), 8'(PORT_SRAM)};
+  localparam HAS_CLINT = 1;  // set to 1 when CLINT is instantiated
+  localparam [XBAR_RULES-1:0]    XBAR_RULE_EN   = {(HAS_TIMER != 0) && (HAS_CLINT != 0),
+                                                   HAS_SERIAL != 0, 1'b1};
+  localparam [XBAR_RULES-1:0]    XBAR_RULE_EXEC = {1'b0, 1'b0, 1'b1};
+
+  wire [XBAR_SLAVES*32-1:0] xbar_araddr;
+  wire [XBAR_SLAVES*3-1:0]  xbar_arprot;
+  wire [XBAR_SLAVES-1:0]    xbar_arvalid;
+  wire [XBAR_SLAVES-1:0]    xbar_arready;
+  wire [XBAR_SLAVES*32-1:0] xbar_rdata;
+  wire [XBAR_SLAVES*2-1:0]  xbar_rresp;
+  wire [XBAR_SLAVES-1:0]    xbar_rvalid;
+  wire [XBAR_SLAVES-1:0]    xbar_rready;
+  wire [XBAR_SLAVES*32-1:0] xbar_awaddr;
+  wire [XBAR_SLAVES*3-1:0]  xbar_awprot;
+  wire [XBAR_SLAVES-1:0]    xbar_awvalid;
+  wire [XBAR_SLAVES-1:0]    xbar_awready;
+  wire [XBAR_SLAVES*32-1:0] xbar_wdata;
+  wire [XBAR_SLAVES*4-1:0]  xbar_wstrb;
+  wire [XBAR_SLAVES-1:0]    xbar_wvalid;
+  wire [XBAR_SLAVES-1:0]    xbar_wready;
+  wire [XBAR_SLAVES*2-1:0]  xbar_bresp;
+  wire [XBAR_SLAVES-1:0]    xbar_bvalid;
+  wire [XBAR_SLAVES-1:0]    xbar_bready;
+
+  XBAR #(
+      .NUM_SLAVES(XBAR_SLAVES),
+      .NUM_RULES(XBAR_RULES),
+      .RULE_BASE(XBAR_RULE_BASE),
+      .RULE_SIZE(XBAR_RULE_SIZE),
+      .RULE_PORT(XBAR_RULE_PORT),
+      .RULE_EN(XBAR_RULE_EN),
+      .RULE_EXEC(XBAR_RULE_EXEC)
+  ) xbar1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .s_axi_araddr(axi_araddr),
+      .s_axi_arprot(axi_arprot),
+      .s_axi_arvalid(axi_arvalid),
+      .s_axi_arready(axi_arready),
+      .s_axi_rdata(axi_rdata),
+      .s_axi_rresp(axi_rresp),
+      .s_axi_rvalid(axi_rvalid),
+      .s_axi_rready(axi_rready),
+      .s_axi_awaddr(axi_awaddr),
+      .s_axi_awprot(axi_awprot),
+      .s_axi_awvalid(axi_awvalid),
+      .s_axi_awready(axi_awready),
+      .s_axi_wdata(axi_wdata),
+      .s_axi_wstrb(axi_wstrb),
+      .s_axi_wvalid(axi_wvalid),
+      .s_axi_wready(axi_wready),
+      .s_axi_bresp(axi_bresp),
+      .s_axi_bvalid(axi_bvalid),
+      .s_axi_bready(axi_bready),
+      .m_axi_araddr(xbar_araddr),
+      .m_axi_arprot(xbar_arprot),
+      .m_axi_arvalid(xbar_arvalid),
+      .m_axi_arready(xbar_arready),
+      .m_axi_rdata(xbar_rdata),
+      .m_axi_rresp(xbar_rresp),
+      .m_axi_rvalid(xbar_rvalid),
+      .m_axi_rready(xbar_rready),
+      .m_axi_awaddr(xbar_awaddr),
+      .m_axi_awprot(xbar_awprot),
+      .m_axi_awvalid(xbar_awvalid),
+      .m_axi_awready(xbar_awready),
+      .m_axi_wdata(xbar_wdata),
+      .m_axi_wstrb(xbar_wstrb),
+      .m_axi_wvalid(xbar_wvalid),
+      .m_axi_wready(xbar_wready),
+      .m_axi_bresp(xbar_bresp),
+      .m_axi_bvalid(xbar_bvalid),
+      .m_axi_bready(xbar_bready)
+  );
+
   MEM #(
       .RANDOM_DELAY(RANDOM_DELAY),
-      .PMEM_BASE(PMEM_BASE),
-      .PMEM_SIZE(PMEM_SIZE),
-      .HAS_SERIAL(HAS_SERIAL),
-      .HAS_TIMER(HAS_TIMER),
-      .SERIAL_MMIO(SERIAL_MMIO),
-      .RTC_MMIO(RTC_MMIO)
+      .BASE(PMEM_BASE),
+      .SIZE(PMEM_SIZE)
   ) mem1 (
       .clk(clk),
       .rst_n(rst_n),
-      .s_axi_araddr(axi_mem_araddr),
-      .s_axi_arprot(axi_mem_arprot),
-      .s_axi_arvalid(axi_mem_arvalid),
-      .s_axi_arready(axi_mem_arready),
-      .s_axi_rdata(axi_mem_rdata),
-      .s_axi_rresp(axi_mem_rresp),
-      .s_axi_rvalid(axi_mem_rvalid),
-      .s_axi_rready(axi_mem_rready),
-      .s_axi_awaddr(axi_mem_awaddr),
-      .s_axi_awprot(axi_mem_awprot),
-      .s_axi_awvalid(axi_mem_awvalid),
-      .s_axi_awready(axi_mem_awready),
-      .s_axi_wdata(axi_mem_wdata),
-      .s_axi_wstrb(axi_mem_wstrb),
-      .s_axi_wvalid(axi_mem_wvalid),
-      .s_axi_wready(axi_mem_wready),
-      .s_axi_bresp(axi_mem_bresp),
-      .s_axi_bvalid(axi_mem_bvalid),
-      .s_axi_bready(axi_mem_bready)
+      .s_axi_araddr(xbar_araddr[PORT_SRAM*32 +: 32]),
+      .s_axi_arprot(xbar_arprot[PORT_SRAM*3 +: 3]),
+      .s_axi_arvalid(xbar_arvalid[PORT_SRAM]),
+      .s_axi_arready(xbar_arready[PORT_SRAM]),
+      .s_axi_rdata(xbar_rdata[PORT_SRAM*32 +: 32]),
+      .s_axi_rresp(xbar_rresp[PORT_SRAM*2 +: 2]),
+      .s_axi_rvalid(xbar_rvalid[PORT_SRAM]),
+      .s_axi_rready(xbar_rready[PORT_SRAM]),
+      .s_axi_awaddr(xbar_awaddr[PORT_SRAM*32 +: 32]),
+      .s_axi_awprot(xbar_awprot[PORT_SRAM*3 +: 3]),
+      .s_axi_awvalid(xbar_awvalid[PORT_SRAM]),
+      .s_axi_awready(xbar_awready[PORT_SRAM]),
+      .s_axi_wdata(xbar_wdata[PORT_SRAM*32 +: 32]),
+      .s_axi_wstrb(xbar_wstrb[PORT_SRAM*4 +: 4]),
+      .s_axi_wvalid(xbar_wvalid[PORT_SRAM]),
+      .s_axi_wready(xbar_wready[PORT_SRAM]),
+      .s_axi_bresp(xbar_bresp[PORT_SRAM*2 +: 2]),
+      .s_axi_bvalid(xbar_bvalid[PORT_SRAM]),
+      .s_axi_bready(xbar_bready[PORT_SRAM])
+  );
+
+  UART uart1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .s_axi_araddr(xbar_araddr[PORT_UART*32 +: 32]),
+      .s_axi_arprot(xbar_arprot[PORT_UART*3 +: 3]),
+      .s_axi_arvalid(xbar_arvalid[PORT_UART]),
+      .s_axi_arready(xbar_arready[PORT_UART]),
+      .s_axi_rdata(xbar_rdata[PORT_UART*32 +: 32]),
+      .s_axi_rresp(xbar_rresp[PORT_UART*2 +: 2]),
+      .s_axi_rvalid(xbar_rvalid[PORT_UART]),
+      .s_axi_rready(xbar_rready[PORT_UART]),
+      .s_axi_awaddr(xbar_awaddr[PORT_UART*32 +: 32]),
+      .s_axi_awprot(xbar_awprot[PORT_UART*3 +: 3]),
+      .s_axi_awvalid(xbar_awvalid[PORT_UART]),
+      .s_axi_awready(xbar_awready[PORT_UART]),
+      .s_axi_wdata(xbar_wdata[PORT_UART*32 +: 32]),
+      .s_axi_wstrb(xbar_wstrb[PORT_UART*4 +: 4]),
+      .s_axi_wvalid(xbar_wvalid[PORT_UART]),
+      .s_axi_wready(xbar_wready[PORT_UART]),
+      .s_axi_bresp(xbar_bresp[PORT_UART*2 +: 2]),
+      .s_axi_bvalid(xbar_bvalid[PORT_UART]),
+      .s_axi_bready(xbar_bready[PORT_UART]),
+      .tx_valid(uart_tx_valid),
+      .tx_data(uart_tx_data)
+  );
+
+  // CLINT 按窗口内偏移译码，无需传入基址；地址窗口由 XBAR rule 2 决定。
+  CLINT clint1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .s_axi_araddr(xbar_araddr[PORT_CLINT*32 +: 32]),
+      .s_axi_arprot(xbar_arprot[PORT_CLINT*3 +: 3]),
+      .s_axi_arvalid(xbar_arvalid[PORT_CLINT]),
+      .s_axi_arready(xbar_arready[PORT_CLINT]),
+      .s_axi_rdata(xbar_rdata[PORT_CLINT*32 +: 32]),
+      .s_axi_rresp(xbar_rresp[PORT_CLINT*2 +: 2]),
+      .s_axi_rvalid(xbar_rvalid[PORT_CLINT]),
+      .s_axi_rready(xbar_rready[PORT_CLINT]),
+      .s_axi_awaddr(xbar_awaddr[PORT_CLINT*32 +: 32]),
+      .s_axi_awprot(xbar_awprot[PORT_CLINT*3 +: 3]),
+      .s_axi_awvalid(xbar_awvalid[PORT_CLINT]),
+      .s_axi_awready(xbar_awready[PORT_CLINT]),
+      .s_axi_wdata(xbar_wdata[PORT_CLINT*32 +: 32]),
+      .s_axi_wstrb(xbar_wstrb[PORT_CLINT*4 +: 4]),
+      .s_axi_wvalid(xbar_wvalid[PORT_CLINT]),
+      .s_axi_wready(xbar_wready[PORT_CLINT]),
+      .s_axi_bresp(xbar_bresp[PORT_CLINT*2 +: 2]),
+      .s_axi_bvalid(xbar_bvalid[PORT_CLINT]),
+      .s_axi_bready(xbar_bready[PORT_CLINT])
   );
 
   assign invalid_inst = invalid_inst_idu || invalid_csr_access;
