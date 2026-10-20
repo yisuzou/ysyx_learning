@@ -104,6 +104,10 @@ static bool exec_once() {
       return true;
     }
 
+    // Device accesses are served by RTL slaves; sample before the commit edge.
+    if (sim_skip_ref()) {
+      difftest_skip_ref();
+    }
     sim_exec_once();
     cpu.pc = sim_pc();
     cpu.gpr[0] = 0;

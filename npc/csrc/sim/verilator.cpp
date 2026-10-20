@@ -78,6 +78,7 @@ bool sim_invalid_inst() { return dut.invalid_inst; }
 bool sim_finished() { return Verilated::gotFinish(); }
 bool sim_debug_commit() { return dut.diff_ifu_valid; }
 bool sim_bus_error() { return dut.debug_bus_error; }
+bool sim_skip_ref() { return dut.debug_skip_ref; }
 paddr_t sim_bus_error_addr() { return dut.debug_bus_error_addr; }
 unsigned sim_bus_error_resp() { return dut.debug_bus_error_resp; }
 unsigned sim_bus_error_op() { return dut.debug_bus_error_op; }

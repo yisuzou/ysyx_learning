@@ -93,24 +93,36 @@ extern "C" int pmem_ifetch(int raddr) {
   return static_cast<int>(data);
 }
 
-extern "C" int pmem_read(int raddr, char rlen) {
-  uint8_t len = static_cast<uint8_t>(rlen);
+// DPI backend of the RTL SRAM slave (MEM.v): physical memory only.
+// Devices are RTL slaves behind the XBAR and never reach these functions.
+static bool check_dpi_access(paddr_t addr, uint8_t len, bool is_write) {
   if (!valid_dpi_access_len(len)) {
-    std::fprintf(stderr, "unsupported read length: %u\n",
-                 static_cast<unsigned>(len));
-    set_npc_state(NPC_ABORT, cpu.pc, -1);
+    std::fprintf(stderr, "unsupported %s length: %u\n",
+                 is_write ? "write" : "read", static_cast<unsigned>(len));
+  } else if (valid_access(addr, len)) {
+    return true;
+  } else {
+    std::fprintf(stderr, "pmem %s at " FMT_PADDR " is outside SRAM\n",
+                 is_write ? "write" : "read", addr);
+  }
+  set_npc_state(NPC_ABORT, cpu.pc, -1);
+  return false;
+}
+
+extern "C" int pmem_read(int raddr, char rlen) {
+  paddr_t addr = static_cast<paddr_t>(raddr);
+  uint8_t len = static_cast<uint8_t>(rlen);
+  if (!check_dpi_access(addr, len, false)) {
     return 0;
   }
-  return static_cast<int>(paddr_read(static_cast<paddr_t>(raddr), len));
+  return static_cast<int>(paddr_read(addr, len));
 }
 
 extern "C" void pmem_write(int waddr, int wdata, char wlen) {
+  paddr_t addr = static_cast<paddr_t>(waddr);
   uint8_t len = static_cast<uint8_t>(wlen);
-  if (!valid_dpi_access_len(len)) {
-    std::fprintf(stderr, "unsupported write length: %u\n",
-                 static_cast<unsigned>(len));
-    set_npc_state(NPC_ABORT, cpu.pc, -1);
+  if (!check_dpi_access(addr, len, true)) {
     return;
   }
-  paddr_write(static_cast<paddr_t>(waddr), len, static_cast<word_t>(wdata));
+  paddr_write(addr, len, static_cast<word_t>(wdata));
 }
