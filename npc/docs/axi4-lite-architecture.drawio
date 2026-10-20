@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="31.1.5">
+  <diagram id="npc-axi-lite" name="NPC AXI4-Lite 总线结构">
+    <mxGraphModel dx="1800" dy="660" grid="1" gridSize="10" page="1" pageWidth="1840" pageHeight="700" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="NPC：两个 AXI4-Lite 主机共享一个 MEM 从机" style="text;html=1;align=left;fontSize=24;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="60" y="40" width="1500" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="IFU&lt;br&gt;只读主机&lt;br&gt;IDLE：取指　WAIT：执行" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="60" y="150" width="240" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="LSU&lt;br&gt;读写主机&lt;br&gt;跨字 RAM 拆成两笔事务" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="60" y="470" width="240" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="AXIArbiter&lt;br&gt;读：轮询，锁定至 R 握手&lt;br&gt;写：LSU 的 AW/W/B 直通" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="560" y="310" width="270" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="MEM&lt;br&gt;单个 AXI4-Lite 从机&lt;br&gt;AR 缓存，AW/W 独立缓存" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="310" width="240" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="现有 C++ 内存 / MMIO&lt;br&gt;RAM、串口、RTC&lt;br&gt;通过 DPI 访问，仅用于仿真" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=18;" vertex="1" parent="1">
+          <mxGeometry x="1510" y="310" width="280" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="AR 请求 / R 响应" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;startArrow=classic;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.3;fontSize=16;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="3" target="5">
+          <mxGeometry x="-0.4" y="-20" relative="1" as="geometry">
+            <Array as="points"><mxPoint x="430" y="200" /><mxPoint x="430" y="340" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="9" value="AR/R + AW/W/B" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;startArrow=classic;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.7;fontSize=16;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="4" target="5">
+          <mxGeometry x="-0.4" y="20" relative="1" as="geometry">
+            <Array as="points"><mxPoint x="430" y="520" /><mxPoint x="430" y="390" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="10" value="32 位 AXI4-Lite&lt;br&gt;AR / R / AW / W / B" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;startArrow=classic;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=16;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry x="0" y="-35" relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="pmem_ifetch / read / write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;startArrow=classic;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=16;labelBackgroundColor=#ffffff;dashed=1;" edge="1" parent="1" source="6" target="7">
+          <mxGeometry x="0" y="-25" relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="请求通道：AR、AW、W →　响应通道：R、B ←　各通道的 READY 方向与 VALID 相反。&lt;br&gt;蓝色：RTL 控制模块；灰色：仿真后端。数据在各自 VALID &amp;&amp; READY 的时钟沿完成传输。&lt;br&gt;当前执行顺序：取指 → 执行 / 访存 → 成功提交 → 下一次取指；WAIT 不预取。" style="text;html=1;align=left;fontSize=16;fontColor=#444444;" vertex="1" parent="1">
+          <mxGeometry x="560" y="520" width="1230" height="100" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
