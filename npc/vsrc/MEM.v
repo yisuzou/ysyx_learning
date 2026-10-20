@@ -6,18 +6,15 @@ import "DPI-C" function void pmem_write(
 );
 `endif
 
-// 32-bit AXI4-Lite slave: one outstanding read and one outstanding write.
-// AXI control is synthesizable; DPI supplies the simulation-only memory.
+// 32-bit AXI4-Lite SRAM slave: one outstanding read and one outstanding write.
+// Pure memory device: no MMIO knowledge. XBAR routes only the SRAM window
+// here; the local range check is a defensive guard for the DPI backend.
+// AXI control is synthesizable; DPI supplies the simulation-only storage.
 // Future AXI4 bursts/IDs belong at this slave boundary, not in the DPI API.
 module MEM #(
     parameter RANDOM_DELAY = 1,
-    // Match NPC's Kconfig values when connecting this module to top.v.
-    parameter [31:0] PMEM_BASE = 32'h80000000,
-    parameter [31:0] PMEM_SIZE = 32'h08000000,
-    parameter HAS_SERIAL = 1,
-    parameter HAS_TIMER = 1,
-    parameter [31:0] SERIAL_MMIO = 32'h10000000,
-    parameter [31:0] RTC_MMIO = 32'h10000048
+    parameter [31:0] BASE = 32'h80000000,
+    parameter [31:0] SIZE = 32'h08000000
 ) (
     input         clk,
     input         rst_n,
@@ -47,7 +44,6 @@ module MEM #(
     input         s_axi_bready
 );
   localparam [1:0] RESP_OKAY   = 2'b00;
-  localparam [1:0] RESP_SLVERR = 2'b10;
   localparam [1:0] RESP_DECERR = 2'b11;
 
   // Read FSM (AR/R):
@@ -90,7 +86,7 @@ module MEM #(
                             araddr_r[1:0], awaddr_r[1:0]};
 `ifdef SYNTHESIS
   // No hardware storage backend is supplied by this simulation MEM module.
-  wire unused_write_data = &{1'b0, wdata_r};
+  wire unused_write_data = &{1'b0, wdata_r, arprot_r[2]};
 `endif
 
   wire ar_delay_done, aw_delay_done, w_delay_done;
@@ -142,69 +138,19 @@ module MEM #(
   wire r_fire  = s_axi_rvalid  && s_axi_rready;
   wire b_fire  = s_axi_bvalid  && s_axi_bready;
 
-  // Validate before DPI so malformed MMIO cannot trigger host assertions or
-  // partial side effects. The decoder covers NPC's current RAM/serial/RTC map.
+  // SRAM has no device rules: any in-range word is readable/writable.
   function in_ram_word;
     input [31:0] addr;
     begin
-      in_ram_word = (PMEM_SIZE >= 32'd4) && (addr >= PMEM_BASE) &&
-                    ((addr - PMEM_BASE) <= (PMEM_SIZE - 32'd4));
+      in_ram_word = (SIZE >= 32'd4) && (addr >= BASE) &&
+                    ((addr - BASE) <= (SIZE - 32'd4));
     end
   endfunction
 
-  function in_serial_word;
-    input [31:0] addr;
-    begin
-      in_serial_word = (HAS_SERIAL != 0) &&
-                       ((addr == SERIAL_MMIO) || (addr == SERIAL_MMIO + 32'd4));
-    end
-  endfunction
-
-  function in_rtc_word;
-    input [31:0] addr;
-    begin
-      in_rtc_word = (HAS_TIMER != 0) &&
-                    ((addr == RTC_MMIO) || (addr == RTC_MMIO + 32'd4));
-    end
-  endfunction
-
-  function [1:0] read_resp;
-    input [31:0] addr;
-    input instruction;
-    begin
-      if (in_ram_word(addr))
-        read_resp = RESP_OKAY;
-      else if (instruction)
-        read_resp = RESP_DECERR; // Instruction fetch never touches MMIO.
-      else if (in_rtc_word(addr))
-        read_resp = RESP_OKAY;
-      else if (in_serial_word(addr))
-        read_resp = RESP_SLVERR; // Serial supports writes only.
-      else
-        read_resp = RESP_DECERR;
-    end
-  endfunction
-
-  function [1:0] write_resp;
-    input [31:0] addr;
-    input [3:0] strb;
-    begin
-      if (strb == 4'b0000)
-        write_resp = RESP_OKAY; // A zero-strobe write is a no-op.
-      else if (in_ram_word(addr))
-        write_resp = RESP_OKAY;
-      else if (in_serial_word(addr))
-        write_resp = ((addr == SERIAL_MMIO) && (strb == 4'b0001)) ?
-                     RESP_OKAY : RESP_SLVERR;
-      else if (in_rtc_word(addr))
-        write_resp = RESP_SLVERR; // RTC supports reads only.
-      else
-        write_resp = RESP_DECERR;
-    end
-  endfunction
-
-  wire [1:0] rd_access_resp = read_resp(rd_word_addr, arprot_r[2]);
-  wire [1:0] wr_access_resp = write_resp(wr_word_addr, wstrb_r);
+  wire [1:0] rd_access_resp = in_ram_word(rd_word_addr) ? RESP_OKAY : RESP_DECERR;
+  // A zero-strobe write is a no-op and always succeeds.
+  wire [1:0] wr_access_resp = ((wstrb_r == 4'b0000) || in_ram_word(wr_word_addr)) ?
+                              RESP_OKAY : RESP_DECERR;
 
 `ifndef SYNTHESIS
   // Preserve the existing DPI API (length, not strobes). Common contiguous
@@ -258,18 +204,27 @@ module MEM #(
     endcase
   end
 
+  // State registers.
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      rd_state <= RD_IDLE;
+      wr_state <= WR_COLLECT;
+    end else begin
+      rd_state <= rd_next_state;
+      wr_state <= wr_next_state;
+    end
+  end
+
   // Read request registers and response registers have separate enables.
   // RDATA/RRESP are written only in RD_ACCESS, never during RD_RESP.
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      rd_state <= RD_IDLE;
       araddr_r <= 32'b0;
       arprot_r <= 3'b0;
       s_axi_rdata <= 32'b0;
       s_axi_rresp <= RESP_OKAY;
     end else begin
-      rd_state <= rd_next_state;
-      if (ar_fire) begin//把AR通道的地址和保护属性寄存起来，供后续的读操作使用
+      if (ar_fire) begin // 锁存 AR 通道的地址和保护属性，供后续读访问使用
         araddr_r <= s_axi_araddr;
         arprot_r <= s_axi_arprot;
       end
@@ -291,7 +246,6 @@ module MEM #(
   // AW and W are independent one-entry buffers, released together after B.
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      wr_state <= WR_COLLECT;
       aw_pending <= 1'b0;
       w_pending <= 1'b0;
       awaddr_r <= 32'b0;
@@ -300,7 +254,6 @@ module MEM #(
       wstrb_r <= 4'b0;
       s_axi_bresp <= RESP_OKAY;
     end else begin
-      wr_state <= wr_next_state;
       if (aw_fire) begin
         awaddr_r <= s_axi_awaddr;
         awprot_r <= s_axi_awprot;
