@@ -4,6 +4,7 @@
 !Makefile
 !Kconfig
 !*.mk
+!scripts/regress.sh
 !*.[cSh]
 !*.v
 !*.cc

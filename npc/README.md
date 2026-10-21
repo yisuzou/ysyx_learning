@@ -36,8 +36,8 @@ make -C npc
 Use `make -C npc menuconfig` to change the configuration. It generates the
 same `.config`, `include/config/auto.conf`, and
 `include/generated/autoconf.h` interfaces as NEMU. The menu controls memory,
-instruction/function/memory/device tracing, watchpoints, difftest, waveform
-generation, and serial/RTC devices and addresses.
+instruction/function/memory/device tracing, random AXI delays, watchpoints,
+difftest, waveform generation, and serial/RTC devices and addresses.
 
 The former `ITRACE=`, `FTRACE=`, `MTRACE=`, and `TRACE_FLAGS=` Make variables
 are rejected instead of being silently ignored; select their Kconfig
@@ -69,6 +69,31 @@ when it is not. NPC accepts the NEMU-compatible command-line options `-b`,
 
 ```sh
 make -C npc sim IMG=/path/to/image.bin ARGS=
+```
+
+## Regression tests
+
+Run all AM cpu-tests followed by MicroBench's `train` workload:
+
+```sh
+npc/scripts/regress.sh
+npc/scripts/regress.sh --cpu-tests 'add dummy unalign'
+npc/scripts/regress.sh --timeout 3600
+```
+
+The script uses `ARCH=riscv32e-npc`, forces batch execution, and prints each
+image's PASS/FAIL status and simulated cycle count (excluding reset and
+shutdown). It continues after failures and exits nonzero if any case fails,
+times out, or lacks a GOOD TRAP/cycle count. Each run saves build/test logs and
+`summary.tsv` in a new `npc/build/regress-*` directory; use `--log-dir DIR` to
+choose a directory. The default timeout is 1800 seconds per build/run.
+`--help` lists the options and environment overrides.
+
+Run other MicroBench workloads directly from their directory, for example:
+
+```sh
+cd am-kernels/benchmarks/microbench
+make ARCH=riscv32e-npc run mainargs=test
 ```
 
 ## Differential testing
@@ -150,8 +175,13 @@ and aborts without retiring the failing instruction. Fault recovery requires
 reset; RISC-V access-fault traps are not implemented.
 
 RAM and current serial/RTC decode parameters are passed from Kconfig by the
-Verilator build rules. `top.RANDOM_DELAY` defaults to 1; override it to 0 when
-elaborating the design for a deterministic run.
+Verilator build rules. To control random AXI delays, run `make -C npc menuconfig`
+and select **Testing and Debugging -> Enable random AXI delays**
+(`CONFIG_RANDOM_DELAY`). It is disabled by default for faster software tests;
+enable it to exercise AXI handshakes and backpressure. The build passes the
+setting to `top.RANDOM_DELAY`, which controls IFU, LSU, and MEM together.
+After saving, the next build automatically selects the matching configuration
+object directory and rebuilds `build/top`; no `make clean` is needed.
 The synthesizable state machines contain no DPI calls; MEM's storage backend
 and top's debug callbacks are simulation-only and excluded under `SYNTHESIS`.
 

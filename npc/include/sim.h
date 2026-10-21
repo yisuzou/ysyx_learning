@@ -19,6 +19,7 @@ void sim_init();
 void sim_set_args(int argc, char **argv);
 void sim_reset(int cycles);
 void sim_exec_once();
+uint64_t sim_cycle_count();
 void sim_finish();
 vaddr_t sim_pc();
 word_t sim_inst();

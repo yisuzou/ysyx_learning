@@ -20,7 +20,13 @@ sim: $(BINARY)
 
 wave:
 	gtkwave -7 build/wave.fst config.gtkw
-
+onekey:
+	$(NPC_HOME)/scripts/regress.sh
 run: sim
 
-.PHONY: sim run
+# One perf-log.md row for the current commit; see npc/docs/perf-log.md.
+# Usage: make perf DESC="说明" [PERF_ARCH=riscv32e-npc]
+perf:
+	$(NPC_HOME)/scripts/perf.sh "$(DESC)" "$(PERF_ARCH)"
+
+.PHONY: sim run perf

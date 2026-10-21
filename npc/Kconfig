@@ -37,6 +37,14 @@ config BATCH_MODE
     immediately. Disable this option to enter the interactive SDB by default.
     An explicit ARGS value on the make command line overrides this default.
 
+config RANDOM_DELAY
+  bool "Enable random AXI delays"
+  default n
+  help
+    Enable random request/response delays in the IFU, LSU, and MEM modules
+    to exercise AXI handshakes and backpressure. This slows down simulation.
+    Disable this option for deterministic timing and faster software tests.
+
 config TRACE
   bool "Enable tracers"
   default y

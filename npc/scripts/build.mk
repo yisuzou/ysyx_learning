@@ -20,6 +20,7 @@ LDFLAGS += -lreadline -ldl
 VERILATOR_TRACE_FLAGS = $(if $(CONFIG_WAVE_TRACE),--trace-fst,)
 VERILATOR_RTL_FLAGS = $(if $(CONFIG_RVE),-DCONFIG_RVE,)
 ifeq ($(TOP),top)
+VERILATOR_RTL_FLAGS += -GRANDOM_DELAY=$(if $(CONFIG_RANDOM_DELAY),1,0)
 # Keep the RTL XBAR address map and device rules in step with the host Kconfig configuration.
 VERILATOR_RTL_FLAGS += -GPMEM_BASE=$(CONFIG_MBASE) -GPMEM_SIZE=$(CONFIG_MSIZE)
 VERILATOR_RTL_FLAGS += -GHAS_SERIAL=$(if $(and $(CONFIG_DEVICE),$(CONFIG_HAS_SERIAL)),1,0)

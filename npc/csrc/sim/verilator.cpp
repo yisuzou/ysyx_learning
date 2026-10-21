@@ -11,6 +11,7 @@
 
 static Vtop dut;
 static vluint64_t sim_time = 0;
+static uint64_t guest_cycles = 0;
 #if VM_TRACE_FST
 static VerilatedFstC *trace = nullptr;
 #endif
@@ -37,6 +38,7 @@ void sim_init() {
 }
 
 void sim_reset(int cycles) {
+  guest_cycles = 0;
   std::memset(&cpu, 0, sizeof(cpu));
   dut.clk = 0;
   dut.rst_n = 0;
@@ -57,7 +59,10 @@ void sim_exec_once() {
   eval_once();
   dut.clk = 0;
   eval_once();
+  guest_cycles++;
 }
+
+uint64_t sim_cycle_count() { return guest_cycles; }
 
 void sim_finish() {
   sim_exec_once();

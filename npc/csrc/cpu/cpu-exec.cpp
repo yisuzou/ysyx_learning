@@ -1,5 +1,6 @@
 #include <cpu/cpu.h>
 #include <cpu/difftest.h>
+#include <cstdint>
 #include <device/device.h>
 #include <isa.h>
 #include <sim.h>
@@ -75,14 +76,17 @@ static void trace_instruction(vaddr_t pc, word_t inst) {
 
 static bool exec_once() {
   if (sim_bus_error()) {
-    static const char *const operations[] = {"instruction fetch", "load", "store"};
+    static const char *const operations[] = {"instruction fetch", "load",
+                                             "store"};
     unsigned op = sim_bus_error_op();
-    const char *operation =
-        op < static_cast<unsigned>(ARRLEN(operations)) ? operations[op] : "unknown";
+    const char *operation = op < static_cast<unsigned>(ARRLEN(operations))
+                                ? operations[op]
+                                : "unknown";
     std::fprintf(stderr,
                  "AXI4-Lite %s error: pc = " FMT_WORD ", addr = " FMT_PADDR
                  ", resp = %u\n",
-                 operation, sim_pc(), sim_bus_error_addr(), sim_bus_error_resp());
+                 operation, sim_pc(), sim_bus_error_addr(),
+                 sim_bus_error_resp());
     set_npc_state(NPC_ABORT, sim_pc(), -1);
     return false;
   }
@@ -155,8 +159,14 @@ static void execute(uint64_t n) {
 }
 
 static void statistic() {
+  uint64_t cycles = sim_cycle_count();
   Log("host time spent = %" PRIu64 " us", g_timer);
   Log("total guest instructions = %" PRIu64, g_nr_guest_inst);
+  Log("total guest cycles = %" PRIu64, cycles);
+  if (g_nr_guest_inst > 0 && cycles > 0) {
+    Log("PERF: inst= %" PRIu64 " cycles= %" PRIu64 " IPC= %.3f",
+        g_nr_guest_inst, cycles, (double)g_nr_guest_inst / (double)cycles);
+  }
   if (g_timer > 0) {
     Log("simulation frequency = %" PRIu64 " inst/s",
         g_nr_guest_inst * 1000000 / g_timer);

@@ -3,7 +3,7 @@ import "DPI-C" function void npc_ebreak(input int halt_code, input int pc);
 import "DPI-C" function void npc_reg_write(input int index, input int data);
 `endif
 module top #(
-    parameter RANDOM_DELAY = 1,
+    parameter RANDOM_DELAY = 0,
     parameter [31:0] PMEM_BASE = 32'h80000000,
     parameter [31:0] PMEM_SIZE = 32'h08000000,
     parameter HAS_SERIAL = 1,
