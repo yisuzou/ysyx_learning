@@ -82,12 +82,8 @@ module MEM #(
   wire [31:0] wr_word_addr = {awaddr_r[31:2], 2'b00};
   // This backend distinguishes instruction/data accesses via ARPROT[2].
   // Privilege/security checks and AWPROT policy are not implemented.
-  wire unused_attributes = &{1'b0, arprot_r[1:0], awprot_r,
+  wire unused_attributes = &{1'b0, arprot_r, awprot_r,
                             araddr_r[1:0], awaddr_r[1:0]};
-`ifdef SYNTHESIS
-  // No hardware storage backend is supplied by this simulation MEM module.
-  wire unused_write_data = &{1'b0, wdata_r, arprot_r[2]};
-`endif
 
   wire ar_delay_done, aw_delay_done, w_delay_done;
   wire r_delay_done, b_delay_done;
@@ -151,6 +147,31 @@ module MEM #(
   // A zero-strobe write is a no-op and always succeeds.
   wire [1:0] wr_access_resp = ((wstrb_r == 4'b0000) || in_ram_word(wr_word_addr)) ?
                               RESP_OKAY : RESP_DECERR;
+
+`ifdef SYNTHESIS
+  // Hardware storage for synthesis: BASE is 4-byte aligned, SIZE is a
+  // multiple of 4. The array has no reset; writes are gated by rst_n.
+  localparam integer WORDS = SIZE / 4;
+  localparam integer INDEX_W = (WORDS > 1) ? $clog2(WORDS) : 1;
+
+  reg [31:0] mem [0:WORDS-1];
+
+  // Equivalent to ((addr - BASE) >> 2) but only the bits used as an index,
+  // keeping the lint free of unused-bit warnings.
+  wire [INDEX_W-1:0] rd_index = rd_word_addr[INDEX_W+1:2] - BASE[INDEX_W+1:2];
+  wire [INDEX_W-1:0] wr_index = wr_word_addr[INDEX_W+1:2] - BASE[INDEX_W+1:2];
+
+  // 阵列不复位；复位期间禁止写入。
+  always @(posedge clk) begin
+    if (rst_n && wr_state == WR_ACCESS &&
+        wr_access_resp == RESP_OKAY) begin
+      if (wstrb_r[0]) mem[wr_index][ 7: 0] <= wdata_r[ 7: 0];
+      if (wstrb_r[1]) mem[wr_index][15: 8] <= wdata_r[15: 8];
+      if (wstrb_r[2]) mem[wr_index][23:16] <= wdata_r[23:16];
+      if (wstrb_r[3]) mem[wr_index][31:24] <= wdata_r[31:24];
+    end
+  end
+`endif
 
 `ifndef SYNTHESIS
   // Preserve the existing DPI API (length, not strobes). Common contiguous
@@ -238,6 +259,9 @@ module MEM #(
           else
             s_axi_rdata <= pmem_read(rd_word_addr, 8'd4);
         end
+`else
+        if (rd_access_resp == RESP_OKAY)
+          s_axi_rdata <= mem[rd_index];
 `endif
       end
     end

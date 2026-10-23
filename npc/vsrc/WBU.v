@@ -112,16 +112,16 @@ module WBU (
       .mepc_data(mepc_data),
       .mcause_data(mcause_data),
       .mtvec_data(mtvec_data),
-      .invalid_csr_access(invalid_csr_access)
+      .invalid_csr_access(invalid_csr_access),
+      .dbg_mstatus(dbg_mstatus),
+      .dbg_mtvec(dbg_mtvec),
+      .dbg_mepc(dbg_mepc),
+      .dbg_mcause(dbg_mcause),
+      .dbg_mcycle(dbg_mcycle),
+      .dbg_mcycleh(dbg_mcycleh),
+      .dbg_mvendorid(dbg_mvendorid),
+      .dbg_marchid(dbg_marchid)
   );
-  assign dbg_mstatus   = csr1.mstatus;
-  assign dbg_mtvec     = csr1.mtvec;
-  assign dbg_mepc      = csr1.mepc;
-  assign dbg_mcause    = csr1.mcause;
-  assign dbg_mcycle    = csr1.mcycle;
-  assign dbg_mcycleh   = csr1.mcycleh;
-  assign dbg_mvendorid = csr1.mvendorid;
-  assign dbg_marchid   = csr1.marchid;
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

@@ -15,7 +15,15 @@ module CSR #(
   output reg [DATA_WIDTH-1:0] rdata1,
   output     [DATA_WIDTH-1:0] mtvec_data,
   //output [DATA_WIDTH-1:0] rdata2,
-  output reg invalid_csr_access
+  output reg invalid_csr_access,
+  output     [DATA_WIDTH-1:0] dbg_mstatus,
+  output     [DATA_WIDTH-1:0] dbg_mtvec,
+  output     [DATA_WIDTH-1:0] dbg_mepc,
+  output     [DATA_WIDTH-1:0] dbg_mcause,
+  output     [DATA_WIDTH-1:0] dbg_mcycle,
+  output     [DATA_WIDTH-1:0] dbg_mcycleh,
+  output     [DATA_WIDTH-1:0] dbg_mvendorid,
+  output     [DATA_WIDTH-1:0] dbg_marchid
 );
   //reg [DATA_WIDTH-1:0] rf[2**ADDR_WIDTH-1:0];
   //只需要实现几个CSR寄存器，分别是mstatus、mtvec、mepc、mcause、mcycle...
@@ -39,6 +47,16 @@ module CSR #(
 //地址译码，判断是否是有效的CSR寄存器访问
 
   assign mtvec_data = mtvec; //mtvec寄存器的值作为pc跳转地址
+
+  //调试输出：通过端口暴露内部CSR，避免跨模块层次引用
+  assign dbg_mstatus   = mstatus;
+  assign dbg_mtvec     = mtvec;
+  assign dbg_mepc      = mepc;
+  assign dbg_mcause    = mcause;
+  assign dbg_mcycle    = mcycle;
+  assign dbg_mcycleh   = mcycleh;
+  assign dbg_mvendorid = mvendorid;
+  assign dbg_marchid   = marchid;
 
   always @(*) begin //组合逻辑，寄存器读
     invalid_csr_access = 1'b0; //默认有效访问

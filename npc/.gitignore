@@ -5,6 +5,11 @@
 !Kconfig
 !*.mk
 !scripts/regress.sh
+!scripts/perf.sh
+!scripts/perf_record.py
+!scripts/sta/
+!scripts/sta/**
+scripts/sta/__pycache__/
 !*.[cSh]
 !*.v
 !*.cc
@@ -13,6 +18,9 @@
 !.gitignore
 !README.md
 !docs/axi4-lite-design-report.md
+!docs/nangate45-sta.md
+!docs/perf-log.md
+!docs/2026-10-23-synthesis-sta-notes.md
 !docs/axi4-lite-architecture.drawio
 !docs/axi4-lite-architecture.svg
 !tests/*.sv

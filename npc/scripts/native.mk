@@ -24,9 +24,13 @@ onekey:
 	$(NPC_HOME)/scripts/regress.sh
 run: sim
 
-# One perf-log.md row for the current commit; see npc/docs/perf-log.md.
+# 仿真 + make sta 全部成功后，自动追加 perf-log.md；详见 npc/docs/perf-log.md。
 # Usage: make perf DESC="说明" [PERF_ARCH=riscv32e-npc]
+# 说明通过环境传递，避免其中的引号、$ 或反引号被 recipe 的 shell 再次解释。
+export PERF_DESC = $(DESC)
+export PERF_ARCH
+export PYTHON ?= python3
 perf:
-	$(NPC_HOME)/scripts/perf.sh "$(DESC)" "$(PERF_ARCH)"
+	@"$(NPC_HOME)/scripts/perf.sh" "$$PERF_DESC" "$$PERF_ARCH"
 
 .PHONY: sim run perf

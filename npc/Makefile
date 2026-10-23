@@ -59,3 +59,4 @@ endif
 # Include configuration and native simulator build rules
 include $(NPC_HOME)/scripts/config.mk
 include $(NPC_HOME)/scripts/native.mk
+include $(NPC_HOME)/scripts/sta.mk
