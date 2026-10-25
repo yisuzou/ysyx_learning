@@ -60,29 +60,41 @@ module WBU (
   wire [31:0] mtvec_data;//由CSR模块提供
   wire [31:0] mcause_data = MCAUSE_ECALL_FROM_M;
 
+  // Parallel PC/write-data candidates: compute all, then select.
+  wire [31:0] pc_plus4          = pc + 32'h4;
+  wire [31:0] pc_plus_imm       = pc + imm;
+  wire [31:0] exu_result_masked = exu_result & ~32'h1;
+
+  wire [31:0] gpr_wdata_pc_plus4 = pc_plus4;
+  wire [31:0] gpr_wdata_pc_imm   = pc_plus_imm;
+
+  wire [31:0] csr_wdata_exu = exu_result;
+  wire [31:0] csr_wdata_reg = gpr_rdata1;
+  wire [31:0] csr_wdata_csr = csr_rdata1;
+
   always @(*) begin
     case (gpr_wsel)
       GPR_EXU_RESULT: gpr_wdata = exu_result;
-      GPR_PC_PLUS4:   gpr_wdata = pc + 32'h4;
+      GPR_PC_PLUS4:   gpr_wdata = gpr_wdata_pc_plus4;
       GPR_IMMEDIATE:  gpr_wdata = imm;
-      GPR_PC_IMM:     gpr_wdata = pc + imm;
+      GPR_PC_IMM:     gpr_wdata = gpr_wdata_pc_imm;
       GPR_MEM_DATA:   gpr_wdata = mem_rdata;
       default:        gpr_wdata = 32'h0;
     endcase
     case (csr_wsel)
-      CSR_EXU_RESULT: csr_wdata = exu_result;
-      CSR_REG: csr_wdata = gpr_rdata1;
-      default: csr_wdata = csr_rdata1;
+      CSR_EXU_RESULT: csr_wdata = csr_wdata_exu;
+      CSR_REG:        csr_wdata = csr_wdata_reg;
+      default:        csr_wdata = csr_wdata_csr;
     endcase
   end
 
   always @(*) begin
     case (pc_wsel)
-      PC_EXU_RESULT: pc_wdata = exu_result & ~32'h1;
-      PC_BRANCH:     pc_wdata = pc + imm;
-      PC_TO_MTVEC:    pc_wdata = mtvec_data;
-      PC_TO_MEPC:     pc_wdata = csr_rdata1;
-      default:       pc_wdata = pc + 32'h4;
+      PC_EXU_RESULT: pc_wdata = exu_result_masked;
+      PC_BRANCH:     pc_wdata = pc_plus_imm;
+      PC_TO_MTVEC:   pc_wdata = mtvec_data;
+      PC_TO_MEPC:    pc_wdata = csr_rdata1;
+      default:       pc_wdata = pc_plus4;
     endcase
   end
 
@@ -126,17 +138,10 @@ module WBU (
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       pc <= 32'h80000000;
-    end else begin
-      if (pc_we) begin
-        pc <= pc_wdata;
-      end else begin
-        if (diff_ifu_valid) begin
-        pc <= pc + 32'h4;
-        end
-        else begin
-          pc <= pc;
-        end
-      end
+    end else if (pc_we) begin
+      pc <= pc_wdata;
+    end else if (diff_ifu_valid) begin
+      pc <= pc_plus4;
     end
   end
 
