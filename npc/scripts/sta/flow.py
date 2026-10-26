@@ -139,7 +139,9 @@ def synthesize(args):
     profile = {"mem_bytes": args.mem_bytes, "synthesis_target_ns": args.target_ns,
                "max_fanout_target": args.max_fanout, "abc_buffer_primary_inputs": True,
                "abc_dont_use": ["NOR4_X1"], "abc_slew_target_ps": 100,
-               "netlist_sha256": digest(NETLIST), "liberty_sha256": digest(LIBERTY)}
+               "netlist_sha256": digest(NETLIST), "liberty_sha256": digest(LIBERTY),
+               "mapped_netlist_sha256": digest(SYNTH / "top_nangate45.v"),
+               "source_map_sha256": digest(SYNTH / "top_nangate45.json")}
     (SYNTH / "profile.json").write_text(json.dumps(profile, indent=2) + "\n")
     print(f"Synthesis complete; iSTA netlist: {NETLIST}")
 
@@ -159,6 +161,12 @@ def analyze(period, ieda):
     summary.update(period_ns=period, frequency_mhz=1000 / period,
                    netlist_sha256=digest(NETLIST), liberty_sha256=digest(LIBERTY),
                    analysis="reg-to-reg setup; ideal clock; no SPEF; typical corner")
+    # 单次报告也携带追踪所需的网表身份，历史报告不会误用新网表的实例编号。
+    profile_path = SYNTH / "profile.json"
+    if profile_path.is_file():
+        profile = json.loads(profile_path.read_text())
+        if profile.get("netlist_sha256") == summary["netlist_sha256"]:
+            summary["profile"] = profile
     (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     (STA / "latest.json").write_text(json.dumps(summary, indent=2) + "\n")
     print_summary(summary)
@@ -300,7 +308,15 @@ def complete_flow(args):
                       fmax_report=str(STA / "fmax.json"),
                       tools={"yosys": version, "ieda": shutil.which(args.ieda),
                              "ista_git": ista_version.group(1) if ista_version else "unknown"})
+        # 纯后处理：把最差 setup 路径关联到原始信号和声明位置，不重新计算时序。
+        # 延迟均来自 iSTA；ABC 优化后的组合门不猜测为某个 RTL 运算。
+        from trace_paths import generate
+        prefix = STA / "critical_paths"
+        generate(result, report, SYNTH / "top_nangate45.v", NETLIST,
+                 SYNTH / "top_nangate45.json", prefix, root=NPC)
+        result["critical_paths"] = {"markdown": str(prefix) + ".md", "json": str(prefix) + ".json"}
         write_json(output, result)
+        print(f"Critical paths: {prefix}.md")
         print(f"Cell area: {result['cell_area_um2']:.3f} um^2; complete result: {output}")
         return result
 

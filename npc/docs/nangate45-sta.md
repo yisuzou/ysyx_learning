@@ -135,3 +135,50 @@ run_sta 2.000
 
 The files under `build/` are compatibility entry points for the commands used
 during the walkthrough. The maintained sources survive cleaning `build/`.
+
+## 自动追踪关键路径
+
+完整 `make sta` 成功后，自动为最终通过周期报告中最差的 5 条 setup 路径生成：
+
+- `build/sta/critical_paths.md`：便于阅读，可点击回到原网表和 RTL 声明位置。
+- `build/sta/critical_paths.json`：包含逐级单元的所有端口连接，便于进一步分析。
+
+已有综合/STA 结果时，无需重新运行工具：
+
+```fish
+make -C "$NPC_HOME" sta-trace
+make -C "$NPC_HOME" sta-trace STA_TRACE_KIND=hold STA_TRACE_LIMIT=3
+make -C "$NPC_HOME" sta-trace STA_TRACE_KIND=all
+```
+
+默认读 `result.json` 中的 `passing_report`。也可以选择某次试探的报告，比如查看
+2 ns 下负 slack 的路径：
+
+```fish
+make -C "$NPC_HOME" sta-trace STA_TRACE_REPORT="$NPC_HOME/build/sta/runs/<本次2ns目录>/top.rpt"
+```
+
+`STA_TRACE_KIND` 为 `setup`、`hold` 或 `all`；`STA_TRACE_LIMIT` 表示每种检查最多输出
+多少条。脚本只分析报告中已有的路径，不会重新搜索未报告的路径。hold 输出为
+`hold_paths.md/.json`，all 输出为 `all_paths.md/.json`。
+
+每条路径提供起止实例/引脚、Q 保存的 RTL 信号、已验证的 RTL 声明位置、
+clock-to-Q、组合段延迟、组合级数（含缓冲）、逐级 Incr/Path、扇出、较大单元延迟
+及网表行号。进入 MUX 的 S 端会标注“选择控制”。捕获时钟/setup/hold 行不计入数据路径。
+
+这只是对现有时序报告的解释：ABC 重构后的组合门不一定能一一对应到 RTL 运算。
+源码 SHA256 不符时，声明位置只显示为未验证参考，不给出看似可靠的当前源码链接。
+
+脚本先核对报告的 STA 网表 SHA256，再验证原始网表/综合 JSON 的 SHA256，
+并检查每条路径在两份网表中的单元类型、引脚和连线。旧报告缺少后两个哈希时会
+明确说明验证范围；历史报告对应的网表已被新综合覆盖时直接报错，不按编号硬套。
+
+独立 Python 入口支持指定配套的历史文件及输出前缀：
+
+```fish
+python3 "$NPC_HOME/scripts/sta/trace_paths.py" --help
+```
+
+该脚本目前支持本流程的 iSTA 文本报告、Yosys `write_verilog -noexpr` 多行命名端口格式，
+以及 CK 时钟寄存器间路径；不支持的格式会报错。Python 标准库即可运行，不额外调用
+综合或 STA 工具。`make perf` 也会将自动生成的 setup 追踪文件保存到本轮测量证据目录。

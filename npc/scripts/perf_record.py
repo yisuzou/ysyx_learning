@@ -145,6 +145,11 @@ def record(args):
             source = Path(result["passing_report"])
             for suffix in (".rpt", ".cap", ".trans"):
                 shutil.copyfile(source.with_suffix(suffix), archive / f"top{suffix}")
+            # 自动追踪文件也随本轮测量保存，避免下一次 sta 覆盖默认输出。
+            for name, suffix in (("markdown", ".md"), ("json", ".json")):
+                trace_file = result.get("critical_paths", {}).get(name)
+                if trace_file:
+                    shutil.copyfile(trace_file, archive / f"critical_paths{suffix}")
             # 保存完整 STA 结果，避免下一次 make sta 覆盖 result.json 后丢失本行证据。
             sta.write_json(archive / "measurement.json", {
                 "commit": args.commit, "description": args.desc, "configuration": cfg,

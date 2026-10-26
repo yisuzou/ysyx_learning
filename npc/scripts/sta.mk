@@ -11,6 +11,10 @@ STA_START_NS ?= 2.0
 STA_TOLERANCE_NS ?= 0.01
 # 留空时沿用 build/synth/nangate45.lib，首次运行从本机 yosys-sta PDK 复制。
 STA_LIBERTY ?=
+# 已有报告的离线追踪入口：不重新综合或运行 STA。留空时使用 result.json 的通过边界。
+STA_TRACE_REPORT ?=
+STA_TRACE_KIND ?= setup
+STA_TRACE_LIMIT ?= 5
 
 # 每次都重新综合，再对同一份网表二分；不把上一次结果当成当前设计的结果。
 sta:
@@ -19,4 +23,9 @@ sta:
 		--max-fanout "$(STA_MAX_FANOUT)" --start-ns "$(STA_START_NS)" \
 		--tolerance-ns "$(STA_TOLERANCE_NS)" $(if $(STA_LIBERTY),--liberty "$(STA_LIBERTY)")
 
-.PHONY: sta
+sta-trace:
+	@$(PYTHON) "$(NPC_HOME)/scripts/sta/trace_paths.py" \
+		--kind "$(STA_TRACE_KIND)" --limit "$(STA_TRACE_LIMIT)" \
+		$(if $(STA_TRACE_REPORT),--report "$(STA_TRACE_REPORT)")
+
+.PHONY: sta sta-trace
