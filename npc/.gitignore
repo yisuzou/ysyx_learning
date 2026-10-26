@@ -16,6 +16,11 @@ scripts/sta/__pycache__/
 !*.nxdc
 !*.cpp
 !.gitignore
+!test/
+!test/**/*.sdc
+!test/**/*.py
+!test/**/*.tcl
+!Makefile.common
 !README.md
 !docs/axi4-lite-design-report.md
 !docs/nangate45-sta.md
