@@ -74,6 +74,7 @@ make -C "$NPC_HOME" perf DESC="8 KiB 存储器对照" STA_MEM_BYTES=8192
 | - | 【参考】E+-O0（Makefile 误为 -O0 期间的口径，10-21 已修正，无法复现仅存档） | 5099815611 | 499175406 | 0.098 | 10-20 | - | - | arch=riscv32e-npc,rdelay=n,difftest=n,rve=y | - |
 | - | 【参考】E+-O2 基线，寄存器=16，E-vs-I 对照组 | 1769047163 | 196059824 | 0.111 | 10-21 | - | - | arch=riscv32e-npc,rdelay=n,difftest=n,rve=n | - |
 | - | 【参考】I+-O2，寄存器=32；inst 比 E 少 5.1%、周期少 8.7%（A 阶段任务4.2 数据） | 1627559571 | 186533979 | 0.115 | 10-21 | - | - | arch=riscv32-npc,rdelay=n,difftest=n,rve=n | - |
+| 72cc4c45bede | （补说明） | 1627559571 | 186533979 | 0.115 | 2026-10-26 | 407.643..408.946 MHz | 311680.180 | arch=riscv32-npc,rdelay=n,difftest=n,rve=n,sta_mem=4096B,sta_rdelay=n,sta_target=2ns,sta_fo=8,sta_tol=0.01ns,sta_lib=8d540a4d4cf6,sta_sdc=56989109b341,sta_hold=y | [JSON](../build/perf/72cc4c45bede-fb59d72cddc9/measurement.json) |
 
 > 上面三行是**参考行**：测量当晚 Makefile 的 -O2 修改尚未提交，无法挂到 commit，故不能用
 > `git checkout && make perf` 严格复现，仅作对照留档。
