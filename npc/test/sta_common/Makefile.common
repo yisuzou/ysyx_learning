@@ -1,0 +1,63 @@
+# 通用 STA Makefile：被各实验 Makefile 在设置 SYNTH_TOP/SYNTH_RTL/SDC 后 include。
+# 每个实验的输出隔离在 $(CURDIR)/build/ 下。
+
+STA_COMMON_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))/
+BUILD_DIR      ?= $(abspath $(CURDIR)/build)
+
+YOSYS          ?= yosys
+IEDA           ?= $(HOME)/software/yosys-sta/bin/iEDA
+LIBERTY_SRC    ?= $(HOME)/software/yosys-sta/pdk/nangate45/lib/Nangate45_typ.lib
+
+STA_TARGET_NS      ?= 2.0
+STA_MAX_FANOUT     ?= 8
+STA_START_NS       ?= 2.0
+STA_TOLERANCE_NS   ?= 0.01
+
+LIBERTY        = $(BUILD_DIR)/synth/nangate45.lib
+NETLIST_MAPPED = $(BUILD_DIR)/synth/top_nangate45.v
+NETLIST_STA    = $(BUILD_DIR)/sta/top_nangate45_sta.v
+
+.PHONY: sta sta-synth sta-run sta-bisect sta-clean
+
+$(LIBERTY): $(LIBERTY_SRC)
+	@mkdir -p $(BUILD_DIR)/synth
+	cp $(LIBERTY_SRC) $@
+
+$(NETLIST_MAPPED): $(SYNTH_RTL) $(LIBERTY) $(STA_COMMON_DIR)synth.tcl
+	@mkdir -p $(BUILD_DIR)/synth
+	SYNTH_TOP=$(SYNTH_TOP) \
+	SYNTH_RTL="$(SYNTH_RTL)" \
+	SYNTH_BUILD_DIR=$(BUILD_DIR) \
+	SYNTH_PERIOD_NS=$(STA_TARGET_NS) \
+	SYNTH_MAX_FANOUT=$(STA_MAX_FANOUT) \
+	$(YOSYS) -Q -T -p "tcl $(STA_COMMON_DIR)synth.tcl" > $(BUILD_DIR)/synth/synth.log 2>&1
+
+$(NETLIST_STA): $(NETLIST_MAPPED) $(LIBERTY) $(STA_COMMON_DIR)prepare.tcl
+	@mkdir -p $(BUILD_DIR)/sta
+	SYNTH_TOP=$(SYNTH_TOP) \
+	SYNTH_BUILD_DIR=$(BUILD_DIR) \
+	$(YOSYS) -Q -T -p "tcl $(STA_COMMON_DIR)prepare.tcl" > $(BUILD_DIR)/sta/prepare.log 2>&1
+
+sta-synth: $(NETLIST_STA)
+
+sta: $(NETLIST_STA) $(SDC)
+	STA_COMMON_DIR=$(STA_COMMON_DIR) \
+	$(STA_COMMON_DIR)sta.py --ieda $(IEDA) --build-dir $(BUILD_DIR) \
+		--top $(SYNTH_TOP) --rtl "$(SYNTH_RTL)" --sdc $(SDC) \
+		--target-ns $(STA_TARGET_NS) --max-fanout $(STA_MAX_FANOUT) \
+		--start-ns $(STA_START_NS) --tolerance-ns $(STA_TOLERANCE_NS) all
+
+sta-run: $(NETLIST_STA) $(SDC)
+	@if [ -z "$(PERIOD_NS)" ]; then echo "Usage: make sta-run PERIOD_NS=1.5"; exit 1; fi
+	STA_COMMON_DIR=$(STA_COMMON_DIR) \
+	$(STA_COMMON_DIR)sta.py --ieda $(IEDA) --build-dir $(BUILD_DIR) \
+		--top $(SYNTH_TOP) --sdc $(SDC) run --period-ns $(PERIOD_NS)
+
+sta-bisect: $(NETLIST_STA) $(SDC)
+	STA_COMMON_DIR=$(STA_COMMON_DIR) \
+	$(STA_COMMON_DIR)sta.py --ieda $(IEDA) --build-dir $(BUILD_DIR) \
+		--top $(SYNTH_TOP) --rtl "$(SYNTH_RTL)" --sdc $(SDC) \
+		--start-ns $(STA_START_NS) --tolerance-ns $(STA_TOLERANCE_NS) bisect
+
+sta-clean:
+	rm -rf $(BUILD_DIR)
