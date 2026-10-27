@@ -32,8 +32,15 @@ bool sim_skip_ref();
 paddr_t sim_bus_error_addr();
 unsigned sim_bus_error_resp();
 unsigned sim_bus_error_op();
+#ifdef CONFIG_PERF_COUNTERS
 void sim_perf_reset();
 void sim_perf_report(uint64_t retired);
 void sim_perf_note_invalid();
 void sim_perf_note_fault(unsigned op);
+#else
+static inline void sim_perf_reset() {}
+static inline void sim_perf_report(uint64_t) {}
+static inline void sim_perf_note_invalid() {}
+static inline void sim_perf_note_fault(unsigned) {}
+#endif
 #endif

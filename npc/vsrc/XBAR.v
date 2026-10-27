@@ -67,29 +67,25 @@ module XBAR #(
 
   // Read FSM (AR/R):
   // State    Action                                    Next state
-  // RD_IDLE  Decode held ARADDR/ARPROT into rd_sel_r    s_arvalid -> RD_ADDR
-  // RD_ADDR  Route AR to rd_sel_r (or accept: DECERR)    ar_fire -> RD_RESP
+  // RD_IDLE  Decode/forward live AR; latch route        ar_fire -> RD_RESP
   // RD_RESP  Route R from rd_sel_r (or drive DECERR)     r_fire -> RD_IDLE
   // Write FSM (AW/W/B):
   // State    Action                                    Next state
-  // WR_IDLE  Decode held AWADDR into wr_sel_r           s_awvalid -> WR_DATA
-  // WR_DATA  Route AW and W independently; each stops   both done -> WR_RESP
-  //          forwarding after its own handshake
-  // WR_RESP  Route B from wr_sel_r (or drive DECERR)     b_fire -> WR_IDLE
+  // WR_DATA  Decode/forward AW and W independently      both done -> WR_RESP
+  //          Latch AW route; stop each accepted channel
+  // WR_RESP  Route B from wr_sel_r (or drive DECERR)     b_fire -> WR_DATA
   // All unlisted conditions hold the current state.
   // Decoding uses the payload held stable by the master while VALID is high
-  // (AXI A3.2.1), so the decoder sits off the READY/VALID handshake path.
-  // W is not accepted before its AW is decoded; AXI allows a slave to wait
-  // for AWVALID before asserting WREADY.
-  localparam [1:0] RD_IDLE = 2'd0;
-  localparam [1:0] RD_ADDR = 2'd1;
-  localparam [1:0] RD_RESP = 2'd2;
-  localparam [1:0] WR_IDLE = 2'd0;
-  localparam [1:0] WR_DATA = 2'd1;
-  localparam [1:0] WR_RESP = 2'd2;
+  // (AXI A3.2.1). This internal interconnect adds a combinational decode
+  // path between registered endpoints; no separate decode cycle is needed.
+  // W waits for a valid AW address or the route of an already accepted AW.
+  localparam RD_IDLE = 1'b0;
+  localparam RD_RESP = 1'b1;
+  localparam WR_DATA = 1'b0;
+  localparam WR_RESP = 1'b1;
 
-  reg [1:0] rd_state, rd_next_state;
-  reg [1:0] wr_state, wr_next_state;
+  reg rd_state, rd_next_state;
+  reg wr_state, wr_next_state;
   // One-hot target port; all-zero selects the internal DECERR slave.
   reg [NUM_SLAVES-1:0] rd_sel_r, wr_sel_r;
   reg aw_done, w_done;
@@ -121,11 +117,18 @@ module XBAR #(
 
   wire [NUM_SLAVES-1:0] rd_decode = decode(s_axi_araddr, s_axi_arprot[2]);
   wire [NUM_SLAVES-1:0] wr_decode = decode(s_axi_awaddr, 1'b0);
+  // AW may already have completed while W is still pending. Live AWADDR
+  // can then describe another transaction, so W must use the saved route.
+  wire [NUM_SLAVES-1:0] wr_request_sel = aw_done ? wr_sel_r : wr_decode;
+  wire wr_target_valid = aw_done || s_axi_awvalid;
+  wire wr_request_hit = |wr_request_sel;
+  wire wr_address_hit = |wr_decode;
+  wire rd_request_hit = |rd_decode;
   wire rd_hit = |rd_sel_r;
   wire wr_hit = |wr_sel_r;
   // AWPROT is forwarded only; no decode policy depends on it today.
 
-  wire rd_addr_phase = rst_n && (rd_state == RD_ADDR);
+  wire rd_addr_phase = rst_n && (rd_state == RD_IDLE);
   wire rd_resp_phase = rst_n && (rd_state == RD_RESP);
   wire wr_data_phase = rst_n && (wr_state == WR_DATA);
   wire wr_resp_phase = rst_n && (wr_state == WR_RESP);
@@ -135,33 +138,35 @@ module XBAR #(
   // ---------------------------------------------------------------------
   assign m_axi_araddr  = {NUM_SLAVES{s_axi_araddr}};
   assign m_axi_arprot  = {NUM_SLAVES{s_axi_arprot}};
-  assign m_axi_arvalid = {NUM_SLAVES{rd_addr_phase && s_axi_arvalid}} & rd_sel_r;
+  assign m_axi_arvalid = {NUM_SLAVES{rd_addr_phase && s_axi_arvalid}} & rd_decode;
   assign m_axi_rready  = {NUM_SLAVES{rd_resp_phase && s_axi_rready}} & rd_sel_r;
 
   assign m_axi_awaddr  = {NUM_SLAVES{s_axi_awaddr}};
   assign m_axi_awprot  = {NUM_SLAVES{s_axi_awprot}};
   assign m_axi_awvalid = {NUM_SLAVES{wr_data_phase && !aw_done && s_axi_awvalid}} &
-                         wr_sel_r;
+                         wr_decode;
   assign m_axi_wdata   = {NUM_SLAVES{s_axi_wdata}};
   assign m_axi_wstrb   = {NUM_SLAVES{s_axi_wstrb}};
-  assign m_axi_wvalid  = {NUM_SLAVES{wr_data_phase && !w_done && s_axi_wvalid}} &
-                         wr_sel_r;
+  assign m_axi_wvalid  = {NUM_SLAVES{wr_data_phase && !w_done && s_axi_wvalid &&
+                                   wr_target_valid}} & wr_request_sel;
   assign m_axi_bready  = {NUM_SLAVES{wr_resp_phase && s_axi_bready}} & wr_sel_r;
 
   // ---------------------------------------------------------------------
   // Upstream response muxes (AND-OR with the one-hot select).
   // A miss is answered locally: accept the request, return DECERR.
   // ---------------------------------------------------------------------
-  wire sel_arready = |(m_axi_arready & rd_sel_r);
+  wire sel_arready = |(m_axi_arready & rd_decode);
   wire sel_rvalid  = |(m_axi_rvalid  & rd_sel_r);
-  wire sel_awready = |(m_axi_awready & wr_sel_r);
-  wire sel_wready  = |(m_axi_wready  & wr_sel_r);
+  wire sel_awready = |(m_axi_awready & wr_decode);
+  wire sel_wready  = |(m_axi_wready  & wr_request_sel);
   wire sel_bvalid  = |(m_axi_bvalid  & wr_sel_r);
 
-  assign s_axi_arready = rd_addr_phase && (rd_hit ? sel_arready : 1'b1);
+  assign s_axi_arready = rd_addr_phase && (rd_request_hit ? sel_arready : 1'b1);
   assign s_axi_rvalid  = rd_resp_phase && (rd_hit ? sel_rvalid  : 1'b1);
-  assign s_axi_awready = wr_data_phase && !aw_done && (wr_hit ? sel_awready : 1'b1);
-  assign s_axi_wready  = wr_data_phase && !w_done  && (wr_hit ? sel_wready  : 1'b1);
+  assign s_axi_awready = wr_data_phase && !aw_done &&
+                         (wr_address_hit ? sel_awready : 1'b1);
+  assign s_axi_wready  = wr_data_phase && !w_done && wr_target_valid &&
+                         (wr_request_hit ? sel_wready : 1'b1);
   assign s_axi_bvalid  = wr_resp_phase && (wr_hit ? sel_bvalid  : 1'b1);
 
   integer i;
@@ -188,7 +193,7 @@ module XBAR #(
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       rd_state <= RD_IDLE;
-      wr_state <= WR_IDLE;
+      wr_state <= WR_DATA;
     end else begin
       rd_state <= rd_next_state;
       wr_state <= wr_next_state;
@@ -201,19 +206,17 @@ module XBAR #(
   always @(*) begin
     rd_next_state = rd_state;
     case (rd_state)
-      RD_IDLE: if (s_axi_arvalid) rd_next_state = RD_ADDR;
-      RD_ADDR: if (ar_fire)       rd_next_state = RD_RESP;
+      RD_IDLE: if (ar_fire)       rd_next_state = RD_RESP;
       RD_RESP: if (r_fire)        rd_next_state = RD_IDLE;
       default:                    rd_next_state = RD_IDLE;
     endcase
 
     wr_next_state = wr_state;
     case (wr_state)
-      WR_IDLE: if (s_axi_awvalid) wr_next_state = WR_DATA;
       WR_DATA: if ((aw_done || aw_fire) && (w_done || w_fire))
                                   wr_next_state = WR_RESP;
-      WR_RESP: if (b_fire)        wr_next_state = WR_IDLE;
-      default:                    wr_next_state = WR_IDLE;
+      WR_RESP: if (b_fire)        wr_next_state = WR_DATA;
+      default:                    wr_next_state = WR_DATA;
     endcase
   end
 
@@ -223,7 +226,7 @@ module XBAR #(
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       rd_sel_r <= {NUM_SLAVES{1'b0}};
-    end else if ((rd_state == RD_IDLE) && s_axi_arvalid) begin
+    end else if (ar_fire) begin
       rd_sel_r <= rd_decode;
     end
   end
@@ -234,13 +237,14 @@ module XBAR #(
       aw_done  <= 1'b0;
       w_done   <= 1'b0;
     end else begin
-      if ((wr_state == WR_IDLE) && s_axi_awvalid)
-        wr_sel_r <= wr_decode;
-      if (wr_state == WR_IDLE) begin
+      if (b_fire) begin
         aw_done <= 1'b0;
         w_done  <= 1'b0;
       end else begin
-        if (aw_fire) aw_done <= 1'b1;
+        if (aw_fire) begin
+          wr_sel_r <= wr_decode;
+          aw_done <= 1'b1;
+        end
         if (w_fire)  w_done  <= 1'b1;
       end
     end

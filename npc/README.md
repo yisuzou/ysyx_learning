@@ -36,7 +36,7 @@ make -C npc
 Use `make -C npc menuconfig` to change the configuration. It generates the
 same `.config`, `include/config/auto.conf`, and
 `include/generated/autoconf.h` interfaces as NEMU. The menu controls memory,
-instruction/function/memory/device tracing, random AXI delays, watchpoints,
+instruction/function/memory/device tracing, performance counters, random AXI delays, watchpoints,
 difftest, waveform generation, and serial/RTC devices and addresses.
 
 The former `ITRACE=`, `FTRACE=`, `MTRACE=`, and `TRACE_FLAGS=` Make variables
@@ -146,12 +146,22 @@ remain aligned 32-bit accesses.
 
 ## AXI4-Lite
 
-IFU and LSU are 32-bit AXI4-Lite masters connected through `AXIArbiter` to a
-single MEM slave. The read arbiter selects a master before forwarding AR and
-holds ownership until the R handshake. Simultaneous requests use round-robin
+IFU and LSU are 32-bit AXI4-Lite masters connected through `AXIArbiter` to the
+core's external AXI master port. The platform `top` instantiates one XBAR and
+routes requests to MEM, UART, or CLINT. CLINT provides the read-only mtime
+snapshot at `RTC_MMIO`; UART and CLINT windows are not executable.
+The read arbiter forwards the first selected AR immediately and locks its
+selection under backpressure until the R handshake. Simultaneous requests use round-robin
 priority, initially favoring IFU. LSU is the only writer, so AW/W/B pass through
 independently of read arbitration. All interfaces currently use single beats;
 IDs, bursts, and multiple outstanding transactions are future extensions.
+
+Device enables and MMIO addresses belong to `top`. The core retains the RAM
+range for LSU split-access checks and difftest MMIO classification.
+`test/sta_cpu/top.v` wraps the CPU alone, excluding MEM, UART, CLINT, and the
+platform XBAR. Its internal register timing and area are a different scope
+from `make sta`, which evaluates the full platform. AXI boundary timing needs
+separate input/output constraints when evaluating a standalone core.
 
 IFU completes AR/R in IDLE, latches the instruction, then enters WAIT for
 execution. It issues no new fetch while executing; its AWVALID, WVALID, and
@@ -185,7 +195,7 @@ object directory and rebuilds `build/top`; no `make clean` is needed.
 The synthesizable state machines contain no DPI calls; MEM's storage backend
 and top's debug callbacks are simulation-only and excluded under `SYNTHESIS`.
 
-Run protocol tests with Icarus Verilog, including delayed/undelayed LSU requests,
+Run protocol tests with Icarus Verilog and Verilator, including delayed/undelayed LSU requests,
 all access sizes/offsets, AW/W ordering, split faults, resets, round-robin reads,
 and response backpressure:
 

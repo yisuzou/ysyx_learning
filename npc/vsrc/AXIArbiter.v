@@ -1,5 +1,5 @@
 // Two read masters (IFU/LSU) share one AXI4-Lite slave. Read ownership is
-// locked before forwarding AR and held through the final R handshake.
+// selected combinationally while idle, then locked through the R handshake.
 // LSU is the only writer, so AW/W/B remain independent pass-through channels.
 // AXI4 bursts/IDs and additional writers require extending this boundary.
 module AXIArbiter (
@@ -62,7 +62,8 @@ module AXIArbiter (
   localparam OWNER_LSU = 1'b1;
 
   // State     Action                          Transition
-  // ARB_IDLE  Choose/latch owner (round robin) any ARVALID -> ARB_ADDR
+  // ARB_IDLE  Forward chosen AR immediately   ar_fire -> ARB_RESP
+  //                                          stalled ARVALID -> ARB_ADDR
   // ARB_ADDR  Route selected AR, hold owner    ar_fire -> ARB_RESP
   // ARB_RESP  Route R only to selected owner   r_fire -> ARB_IDLE
   // Round-robin priority advances after R completion, never during a stall.
@@ -71,15 +72,18 @@ module AXIArbiter (
   reg owner_r, prefer_r;
   wire choose_owner = ifu_arvalid && lsu_arvalid ? prefer_r :
                       (lsu_arvalid ? OWNER_LSU : OWNER_IFU);
-  wire addr_active = rst_n && (state == ARB_ADDR);
+  // Once an address has been offered for a clock edge, a late contender
+  // must not replace it during AR backpressure, even if it has priority.
+  wire addr_owner = (state == ARB_IDLE) ? choose_owner : owner_r;
+  wire addr_active = rst_n && ((state == ARB_IDLE) || (state == ARB_ADDR));
   wire resp_active = rst_n && (state == ARB_RESP);
 
-  assign m_axi_araddr = owner_r == OWNER_IFU ? ifu_araddr : lsu_araddr;
-  assign m_axi_arprot = owner_r == OWNER_IFU ? ifu_arprot : lsu_arprot;
+  assign m_axi_araddr = addr_owner == OWNER_IFU ? ifu_araddr : lsu_araddr;
+  assign m_axi_arprot = addr_owner == OWNER_IFU ? ifu_arprot : lsu_arprot;
   assign m_axi_arvalid = addr_active &&
-                        (owner_r == OWNER_IFU ? ifu_arvalid : lsu_arvalid);
-  assign ifu_arready = addr_active && (owner_r == OWNER_IFU) && m_axi_arready;
-  assign lsu_arready = addr_active && (owner_r == OWNER_LSU) && m_axi_arready;
+                        (addr_owner == OWNER_IFU ? ifu_arvalid : lsu_arvalid);
+  assign ifu_arready = addr_active && (addr_owner == OWNER_IFU) && m_axi_arready;
+  assign lsu_arready = addr_active && (addr_owner == OWNER_LSU) && m_axi_arready;
   assign ifu_rdata = m_axi_rdata;
   assign lsu_rdata = m_axi_rdata;
   assign ifu_rresp = m_axi_rresp;
@@ -115,7 +119,10 @@ module AXIArbiter (
   always @(*) begin
     next_state = state;
     case (state)
-      ARB_IDLE: if (ifu_arvalid || lsu_arvalid) next_state = ARB_ADDR;
+      ARB_IDLE: begin
+        if (ar_fire) next_state = ARB_RESP;
+        else if (m_axi_arvalid) next_state = ARB_ADDR;
+      end
       ARB_ADDR: if (ar_fire) next_state = ARB_RESP;
       ARB_RESP: if (r_fire) next_state = ARB_IDLE;
       default: next_state = ARB_IDLE;

@@ -19,6 +19,7 @@ CXXFLAGS += -std=c++17 -Wall -Werror $(addprefix -I,$(INC_PATH))
 LDFLAGS += -lreadline -ldl
 VERILATOR_TRACE_FLAGS = $(if $(CONFIG_WAVE_TRACE),--trace-fst,)
 VERILATOR_RTL_FLAGS = $(if $(CONFIG_RVE),-DCONFIG_RVE,)
+VERILATOR_RTL_FLAGS += $(if $(CONFIG_PERF_COUNTERS),-DCONFIG_PERF_COUNTERS,)
 ifeq ($(TOP),top)
 VERILATOR_RTL_FLAGS += -GRANDOM_DELAY=$(if $(CONFIG_RANDOM_DELAY),1,0)
 # Keep the RTL XBAR address map and device rules in step with the host Kconfig configuration.

@@ -1,4 +1,6 @@
 #include <sim.h>
+
+#ifdef CONFIG_PERF_COUNTERS
 #include <utils.h>
 
 #include <cinttypes>
@@ -26,22 +28,78 @@ enum PerfEvent : int {
   PERF_LUI,
   PERF_AUIPC,
   PERF_EXU_USED,
+  PERF_CYCLE,
+  PERF_IFU_PREP,
+  PERF_IFU_AR_WAIT,
+  PERF_IFU_R_WAIT,
+  PERF_EXECUTE_CYCLE,
+  PERF_LSU_WAIT,
+  PERF_IFU_FAULT_HOLD,
+  PERF_IFU_R_ERROR,
+  PERF_IFU_HOLD_LSU,
   PERF_NR,
 };
 
 static uint64_t perf_counts[PERF_NR];
+static constexpr const char *category_names[] = {
+    "alu", "load", "store", "branch", "jump", "csr", "system", "lui", "auipc",
+};
+static constexpr unsigned NR_CATEGORIES = ARRLEN(category_names);
+static_assert(PERF_AUIPC - PERF_ALU + 1 == NR_CATEGORIES);
+static_assert(PERF_NR <= 32);
+
+struct InstructionCycles {
+  uint64_t total;
+  uint64_t execute;
+};
+static InstructionCycles category_cycles[NR_CATEGORIES];
+// This core executes one instruction at a time. Attribute its entire fetch
+// and execution interval at commit, when the existing category bits are valid.
+// Keep unfinished work separate on a fault or a stopped simulation.
+static uint64_t pending_cycles;
+static uint64_t pending_execute_cycles;
+static uint64_t pending_lsu_cycles;
+static uint64_t lsu_load_cycles;
+static uint64_t lsu_store_cycles;
+
+static bool event(unsigned mask, PerfEvent id) { return mask & (1u << id); }
 
 void sim_perf_reset() {
   for (auto &count : perf_counts) {
     count = 0;
   }
+  for (auto &cycles : category_cycles) {
+    cycles = {};
+  }
+  pending_cycles = pending_execute_cycles = pending_lsu_cycles = 0;
+  lsu_load_cycles = lsu_store_cycles = 0;
 }
 
 extern "C" void npc_perf_event(unsigned event_mask) {
+  const unsigned events = event_mask;
   while (event_mask != 0) {
     // __builtin_ctz 返回最低位 1 的下标
     perf_counts[__builtin_ctz(event_mask)]++;
     event_mask &= event_mask - 1; // 清除最低位 1
+  }
+  pending_cycles += event(events, PERF_CYCLE);
+  pending_execute_cycles += event(events, PERF_EXECUTE_CYCLE);
+  pending_lsu_cycles += event(events, PERF_LSU_WAIT);
+
+  if (event(events, PERF_LSU_LOAD) || event(events, PERF_LSU_STORE)) {
+    auto &cycles = event(events, PERF_LSU_STORE) ? lsu_store_cycles
+                                               : lsu_load_cycles;
+    cycles += pending_lsu_cycles;
+    pending_lsu_cycles = 0;
+  }
+  if (event(events, PERF_COMMIT)) {
+    for (unsigned i = 0; i < NR_CATEGORIES; ++i) {
+      if (event(events, static_cast<PerfEvent>(PERF_ALU + i))) {
+        category_cycles[i].total += pending_cycles;
+        category_cycles[i].execute += pending_execute_cycles;
+      }
+    }
+    pending_cycles = pending_execute_cycles = 0;
   }
 }
 
@@ -59,6 +117,90 @@ static double per_inst(uint64_t value, uint64_t inst) {
 
 static const char *check(bool ok) { return ok ? "OK" : "MISMATCH"; }
 
+static void report_cycles(uint64_t commit, uint64_t fetched) {
+  const uint64_t cycles = perf_counts[PERF_CYCLE];
+  const uint64_t execute = perf_counts[PERF_EXECUTE_CYCLE];
+  const uint64_t no_fetch = cycles - fetched;
+  uint64_t category_total = 0, category_execute = 0;
+  Log("PERF: class averages: total=fetch+execute; execute includes commit cycle");
+  for (unsigned i = 0; i < NR_CATEGORIES; ++i) {
+    const uint64_t count = perf_counts[PERF_ALU + i];
+    const auto &spent = category_cycles[i];
+    category_total += spent.total;
+    category_execute += spent.execute;
+    Log("PERF: class %s count=%" PRIu64 " share=%.3f%% total_cycles=%" PRIu64
+        " exec_cycles=%" PRIu64 " avg_total=%.3f avg_exec=%.3f avg_fetch=%.3f",
+        category_names[i], count, 100.0 * per_inst(count, commit), spent.total,
+        spent.execute, per_inst(spent.total, count), per_inst(spent.execute, count),
+        per_inst(spent.total - spent.execute, count));
+  }
+
+  struct Reason {
+    const char *name;
+    uint64_t cycles;
+  };
+  const Reason reasons[] = {
+      {"prepare", perf_counts[PERF_IFU_PREP]},
+      {"ar_wait", perf_counts[PERF_IFU_AR_WAIT]},
+      {"ar_accept", perf_counts[PERF_IFU_AR]},
+      {"r_wait", perf_counts[PERF_IFU_R_WAIT]},
+      {"r_error", perf_counts[PERF_IFU_R_ERROR]},
+      {"fault_hold", perf_counts[PERF_IFU_FAULT_HOLD]},
+      {"execute", execute - perf_counts[PERF_IFU_HOLD_LSU]},
+      {"lsu_hold", perf_counts[PERF_IFU_HOLD_LSU]},
+  };
+  uint64_t reason_sum = 0;
+  Log("PERF: no-fetch cycles=%" PRIu64 " sampled_cycles=%" PRIu64,
+      no_fetch, cycles);
+  for (const auto &reason : reasons) {
+    reason_sum += reason.cycles;
+    Log("PERF: no-fetch %s cycles=%" PRIu64 " share_no_fetch=%.3f%% share_all=%.3f%%",
+        reason.name, reason.cycles, 100.0 * per_inst(reason.cycles, no_fetch),
+        100.0 * per_inst(reason.cycles, cycles));
+  }
+
+  const uint64_t loads = perf_counts[PERF_LSU_LOAD];
+  const uint64_t stores = perf_counts[PERF_LSU_STORE];
+  Log("PERF: lsu latency: CPU request-valid -> result-ready (acceptance cycle included; DONE excluded)");
+  Log("PERF: lsu load count=%" PRIu64 " latency_cycles=%" PRIu64 " avg_latency=%.3f",
+      loads, lsu_load_cycles, per_inst(lsu_load_cycles, loads));
+  Log("PERF: lsu store count=%" PRIu64 " latency_cycles=%" PRIu64 " avg_latency=%.3f",
+      stores, lsu_store_cycles, per_inst(lsu_store_cycles, stores));
+  Log("PERF: lsu all count=%" PRIu64 " latency_cycles=%" PRIu64 " avg_latency=%.3f",
+      loads + stores, lsu_load_cycles + lsu_store_cycles,
+      per_inst(lsu_load_cycles + lsu_store_cycles, loads + stores));
+
+  const uint64_t fetch_phase = perf_counts[PERF_IFU_PREP] +
+      perf_counts[PERF_IFU_AR_WAIT] + perf_counts[PERF_IFU_AR] +
+      perf_counts[PERF_IFU_R_WAIT] + fetched + perf_counts[PERF_IFU_R_ERROR] +
+      perf_counts[PERF_IFU_FAULT_HOLD];
+  Log("PERF: cycle check sampled=%" PRIu64 " vs sim=%" PRIu64 " (%s), "
+      "fetch_phase=%" PRIu64 " vs idle=%" PRIu64 " (%s), "
+      "idle+execute=%" PRIu64 " vs sampled=%" PRIu64 " (%s)",
+      cycles, sim_cycle_count(), check(cycles == sim_cycle_count()),
+      fetch_phase, perf_counts[PERF_IFU_IDLE],
+      check(fetch_phase == perf_counts[PERF_IFU_IDLE]),
+      perf_counts[PERF_IFU_IDLE] + execute, cycles,
+      check(perf_counts[PERF_IFU_IDLE] + execute == cycles));
+  Log("PERF: cycle check no_fetch_reasons=%" PRIu64 " vs no_fetch=%" PRIu64
+      " (%s), class_total=%" PRIu64 " + pending=%" PRIu64
+      " vs sampled=%" PRIu64 " (%s), class_exec=%" PRIu64
+      " + pending_exec=%" PRIu64 " vs execute=%" PRIu64 " (%s)",
+      reason_sum, no_fetch, check(reason_sum == no_fetch),
+      category_total, pending_cycles, cycles,
+      check(category_total + pending_cycles == cycles),
+      category_execute, pending_execute_cycles, execute,
+      check(category_execute + pending_execute_cycles == execute));
+  const uint64_t memory_cycles = lsu_load_cycles + lsu_store_cycles + pending_lsu_cycles;
+  Log("PERF: cycle check lsu_latency=%" PRIu64 " + pending_lsu=%" PRIu64
+      " vs lsu_wait=%" PRIu64 " (%s), lsu_wait+done=%" PRIu64
+      " vs lsu_hold=%" PRIu64 " (%s)",
+      lsu_load_cycles + lsu_store_cycles, pending_lsu_cycles,
+      perf_counts[PERF_LSU_WAIT], check(memory_cycles == perf_counts[PERF_LSU_WAIT]),
+      perf_counts[PERF_LSU_WAIT] + loads + stores, perf_counts[PERF_IFU_HOLD_LSU],
+      check(perf_counts[PERF_LSU_WAIT] + loads + stores == perf_counts[PERF_IFU_HOLD_LSU]));
+}
+
 void sim_perf_report(uint64_t retired) {
   uint64_t commit = perf_counts[PERF_COMMIT];
   uint64_t fetched = perf_counts[PERF_IFU_FETCH];
@@ -70,7 +212,7 @@ void sim_perf_report(uint64_t retired) {
                           perf_counts[PERF_AUIPC];
   uint64_t fetched_expected = commit + perf_counts[PERF_INVALID] + lsu_fault;
 
-  if (commit == 0 && retired == 0) {
+  if (perf_counts[PERF_CYCLE] == 0 && retired == 0) {
     return;
   }
 
@@ -100,4 +242,7 @@ void sim_perf_report(uint64_t retired) {
       category_sum, commit, check(category_sum == commit), fetched,
       fetched_expected, check(fetched == fetched_expected), retired,
       check(retired == commit));
+
+  report_cycles(commit, fetched);
 }
+#endif

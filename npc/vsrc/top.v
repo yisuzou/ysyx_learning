@@ -56,11 +56,7 @@ module top #(
   npc_core #(
       .RANDOM_DELAY(RANDOM_DELAY),
       .PMEM_BASE(PMEM_BASE),
-      .PMEM_SIZE(PMEM_SIZE),
-      .HAS_SERIAL(HAS_SERIAL),
-      .HAS_TIMER(HAS_TIMER),
-      .SERIAL_MMIO(SERIAL_MMIO),
-      .RTC_MMIO(RTC_MMIO)
+      .PMEM_SIZE(PMEM_SIZE)
   ) u_cpu (
       .clk(clk),
       .rst_n(rst_n),
@@ -103,19 +99,21 @@ module top #(
   );
 
   // ---------------------------------------------------------------------------
-  // Platform XBAR: CPU external AXI -> MEM (executable) + UART.
-  // CLINT already lives inside npc_core, so it is not duplicated here.
+  // Platform XBAR: CPU external AXI -> MEM (executable), UART, and CLINT.
+  // The core exposes a bus master; all device routing lives in the platform.
   // ---------------------------------------------------------------------------
-  localparam PLAT_SLAVES = 2;
-  localparam PLAT_RULES  = 2;
+  localparam PLAT_SLAVES = 3;
+  localparam PLAT_RULES  = 3;
   localparam PLAT_PORT_MEM  = 0;
   localparam PLAT_PORT_UART = 1;
+  localparam PLAT_PORT_CLINT = 2;
 
-  localparam [PLAT_RULES*32-1:0] PLAT_RULE_BASE = {SERIAL_MMIO, PMEM_BASE};
-  localparam [PLAT_RULES*32-1:0] PLAT_RULE_SIZE = {32'd8, PMEM_SIZE};
-  localparam [PLAT_RULES*8-1:0]  PLAT_RULE_PORT = {8'(PLAT_PORT_UART), 8'(PLAT_PORT_MEM)};
-  localparam [PLAT_RULES-1:0]    PLAT_RULE_EN   = {HAS_SERIAL != 0, 1'b1};
-  localparam [PLAT_RULES-1:0]    PLAT_RULE_EXEC = {1'b0, 1'b1};
+  localparam [PLAT_RULES*32-1:0] PLAT_RULE_BASE = {RTC_MMIO, SERIAL_MMIO, PMEM_BASE};
+  localparam [PLAT_RULES*32-1:0] PLAT_RULE_SIZE = {32'd8, 32'd8, PMEM_SIZE};
+  localparam [PLAT_RULES*8-1:0]  PLAT_RULE_PORT =
+      {8'(PLAT_PORT_CLINT), 8'(PLAT_PORT_UART), 8'(PLAT_PORT_MEM)};
+  localparam [PLAT_RULES-1:0]    PLAT_RULE_EN   = {HAS_TIMER != 0, HAS_SERIAL != 0, 1'b1};
+  localparam [PLAT_RULES-1:0]    PLAT_RULE_EXEC = 3'b001;
 
   wire [PLAT_SLAVES*32-1:0] plat_araddr;
   wire [PLAT_SLAVES*3-1:0]  plat_arprot;
@@ -214,6 +212,30 @@ module top #(
       .s_axi_bresp(plat_bresp[PLAT_PORT_MEM*2 +: 2]),
       .s_axi_bvalid(plat_bvalid[PLAT_PORT_MEM]),
       .s_axi_bready(plat_bready[PLAT_PORT_MEM])
+  );
+
+  CLINT clint1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .s_axi_araddr(plat_araddr[PLAT_PORT_CLINT*32 +: 32]),
+      .s_axi_arprot(plat_arprot[PLAT_PORT_CLINT*3 +: 3]),
+      .s_axi_arvalid(plat_arvalid[PLAT_PORT_CLINT]),
+      .s_axi_arready(plat_arready[PLAT_PORT_CLINT]),
+      .s_axi_rdata(plat_rdata[PLAT_PORT_CLINT*32 +: 32]),
+      .s_axi_rresp(plat_rresp[PLAT_PORT_CLINT*2 +: 2]),
+      .s_axi_rvalid(plat_rvalid[PLAT_PORT_CLINT]),
+      .s_axi_rready(plat_rready[PLAT_PORT_CLINT]),
+      .s_axi_awaddr(plat_awaddr[PLAT_PORT_CLINT*32 +: 32]),
+      .s_axi_awprot(plat_awprot[PLAT_PORT_CLINT*3 +: 3]),
+      .s_axi_awvalid(plat_awvalid[PLAT_PORT_CLINT]),
+      .s_axi_awready(plat_awready[PLAT_PORT_CLINT]),
+      .s_axi_wdata(plat_wdata[PLAT_PORT_CLINT*32 +: 32]),
+      .s_axi_wstrb(plat_wstrb[PLAT_PORT_CLINT*4 +: 4]),
+      .s_axi_wvalid(plat_wvalid[PLAT_PORT_CLINT]),
+      .s_axi_wready(plat_wready[PLAT_PORT_CLINT]),
+      .s_axi_bresp(plat_bresp[PLAT_PORT_CLINT*2 +: 2]),
+      .s_axi_bvalid(plat_bvalid[PLAT_PORT_CLINT]),
+      .s_axi_bready(plat_bready[PLAT_PORT_CLINT])
   );
 
   UART uart1 (

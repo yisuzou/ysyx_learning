@@ -45,6 +45,15 @@ config RANDOM_DELAY
     to exercise AXI handshakes and backpressure. This slows down simulation.
     Disable this option for deterministic timing and faster software tests.
 
+config PERF_COUNTERS
+  bool "Enable performance counters"
+  default y
+  help
+    Collect IFU, LSU, and instruction-category events through DPI-C and
+    print detailed performance statistics when execution ends. Disable
+    this option to remove event collection and the detailed output.
+    Basic instruction/cycle counts and IPC are always reported.
+
 config TRACE
   bool "Enable tracers"
   default y

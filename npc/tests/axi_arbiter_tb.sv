@@ -166,6 +166,32 @@ module axi_arbiter_tb;
   endtask
   initial begin
     reset;
+    // A ready slave must accept the first offered AR without a grant bubble.
+    arready = 1;
+    ifu_arvalid = 1;
+    #1;
+    if (!arvalid || !ifu_arready || lsu_arready || araddr !== ifu_araddr)
+      $fatal(1, "idle arbiter added an AR grant cycle");
+    tick;
+    arready = 0;
+    ifu_arvalid = 0;
+    hold_response(0);
+    finish_response(0);
+
+    reset;
+    // IFU has priority, but arrives after LSU's AR was already offered.
+    // A stateless mux based on live VALIDs would illegally replace LSU.
+    lsu_arvalid = 1;
+    #1;
+    if (!arvalid || araddr !== lsu_araddr)
+      $fatal(1, "idle LSU request was not forwarded immediately");
+    tick;
+    ifu_arvalid = 1;
+    wait_address(1);
+    hold_response(1);
+    finish_response(1);
+
+    reset;
     // Grant IFU alone; a later LSU request cannot steal a stalled address.
     ifu_arvalid = 1;
     tick;
@@ -191,7 +217,7 @@ module axi_arbiter_tb;
     wait_address(0);
     hold_response(0);
     finish_response(0);
-    if (completed != 34) $fatal(1, "missing/duplicate read completion");
+    if (completed != 36) $fatal(1, "missing/duplicate read completion");
     $display("PASS: AXIArbiter (%0d completed reads, %0d cycles)", completed, cycles);
     $finish;
   end

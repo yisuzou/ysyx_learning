@@ -10,6 +10,9 @@ def main():
     parser.add_argument("--npc", type=Path,
                         default=Path(__file__).resolve().parents[1] / "build/top")
     parser.add_argument("--build-dir", type=Path, default=Path("/tmp/npc-axi-soc"))
+    parser.add_argument("--diff", type=Path, help="NEMU reference shared library")
+    parser.add_argument("--timer-disabled", action="store_true",
+                        help="expect CLINT accesses to return DECERR (HAS_TIMER=0)")
     args = parser.parse_args()
     args.build_dir.mkdir(parents=True, exist_ok=True)
     source = Path(__file__).with_suffix(".S")
@@ -17,7 +20,7 @@ def main():
         1: ("load", "0x40000000", 3),
         2: ("store", "0x40000000", 3),
         3: ("store", "0x10000003", 2),
-        4: ("store", "0x10000048", 3),  # RTC unmapped until CLINT
+        4: ("store", "0x10000048", 3 if args.timer_disabled else 2),
 
         5: ("instruction fetch", "0x40000000", 3),
         6: ("store", "0x87ffffff", 3),
@@ -25,9 +28,10 @@ def main():
         8: ("instruction fetch", "0x10000048", 3),
         9: ("store", "0x10000000", 2),    # sb @+1: lane 1 rejected (word addr)
         10: ("store", "0x10000000", 2),   # UART: halfword rejected
-        11: ("load", "0x10000048", 3),    # RTC unmapped until CLINT
     }
-    for case in range(len(faults) + 1):
+    if args.timer_disabled:
+        faults[11] = ("load", "0x1000004c", 3)
+    for case in range(12):
         elf = args.build_dir / f"case-{case}.elf"
         image = elf.with_suffix(".bin")
         subprocess.run([
@@ -38,16 +42,19 @@ def main():
         ], check=True)
         subprocess.run(["riscv64-unknown-elf-objcopy", "-O", "binary",
                         str(elf), str(image)], check=True)
-        result = subprocess.run([
+        command = [
             str(args.npc.resolve()), "-b",
-            f"--log={args.build_dir / f'case-{case}.log'}", str(image),
-        ], text=True, capture_output=True, timeout=10)
+            f"--log={args.build_dir / f'case-{case}.log'}",
+        ]
+        if args.diff:
+            command.append(f"--diff={args.diff.resolve()}")
+        result = subprocess.run(command + [str(image)], text=True, capture_output=True, timeout=10)
         output = result.stdout + result.stderr
         (args.build_dir / f"case-{case}.output").write_text(output)
-        if case == 0:
+        if case not in faults:
             valid = (result.returncode == 0 and "HIT GOOD TRAP" in output
-                     and result.stderr == "AXI\n")
-            label = "UART/CSR/ecall/mret"
+                     and result.stderr == ("AXI\n" if case == 0 else ""))
+            label = "UART/CSR/ecall/mret" if case == 0 else "CLINT snapshots and advancing mtime"
         else:
             op, addr, resp = faults[case]
             valid = (result.returncode != 0 and "ABORT" in output

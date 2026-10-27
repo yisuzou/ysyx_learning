@@ -25,6 +25,8 @@ scripts/sta/__pycache__/
 !docs/axi4-lite-design-report.md
 !docs/nangate45-sta.md
 !docs/perf-log.md
+!docs/performance-counters.md
+!docs/axi-latency-optimization.md
 !docs/2026-10-23-synthesis-sta-notes.md
 !docs/axi4-lite-architecture.drawio
 !docs/axi4-lite-architecture.svg

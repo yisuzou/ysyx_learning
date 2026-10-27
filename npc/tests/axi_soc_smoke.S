@@ -1,5 +1,5 @@
 // Default case validates RTL UART output and commit-gated CSR/ecall/mret.
-// RTC is unmapped until CLINT is added (case 4 expects DECERR).
+// CLINT supplies read-only mtime snapshots; writes return SLVERR.
 // Fault cases must abort in the host before retiring the failing instruction.
 #ifndef FAULT_CASE
 #define FAULT_CASE 0
@@ -41,7 +41,13 @@ _start:
   sh zero, 0(t0)
 #elif FAULT_CASE == 11
   li t0, 0x10000048
+  lw t1, 4(t0)              // HI captures a low-word snapshot.
+  lw t2, 0(t0)
+  lw a1, 0(t0)              // Repeated LO reads preserve that snapshot.
+  bne t2, a1, fail
+  lw t1, 4(t0)              // A later HI must refresh the snapshot.
   lw a1, 0(t0)
+  bgeu t2, a1, fail
 #else
   la t0, trap_handler
   csrw mtvec, t0

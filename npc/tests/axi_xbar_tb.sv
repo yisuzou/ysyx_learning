@@ -181,6 +181,12 @@ module axi_xbar_tb;
       for (k = 0; k < N; k++) seen0[k] = rd_seen[k];
       @(posedge clk); #1;
       araddr = a; arprot = fetch ? 3'b101 : 3'b001; arvalid = 1;
+      #1;
+      if (exp_port >= 0) begin
+        if (m_arvalid !== ({{(N-1){1'b0}}, 1'b1} << exp_port))
+          $fatal(1, "AR decode added a forwarding cycle");
+      end else if (m_arvalid !== 0 || !arready)
+        $fatal(1, "DECERR address was not accepted immediately");
       n = 0;
       do begin
         @(posedge clk);
@@ -298,9 +304,10 @@ module axi_xbar_tb;
     // Pipelined master: the next AW is presented right after the first AW
     // handshake, before B. XBAR must not forward it until the first B is done.
     begin : b2b
-      integer base, n;
+      integer base, base_dev, n;
       reg aw1, w1, aw2, w2;
       base = wr_seen[0];
+      base_dev = wr_seen[1];
       @(posedge clk); #1;
       awaddr = 32'h80000100; awprot = 3'b001; awvalid = 1;
       wdata = 32'h1; wstrb = 4'hf; wvalid = 0;
@@ -313,7 +320,7 @@ module axi_xbar_tb;
         if (awvalid && awready) aw1 = 1;
         if (wvalid && wready) w1 = 1;
         #1;
-        if (aw1) awaddr = 32'h80000104;  // AWVALID stays high: next request
+        if (aw1) awaddr = 32'h10000000;  // Next AW targets a different slave.
         wvalid = aw1 && !w1 && (n >= 8);
       end
       repeat (5) @(posedge clk);  // slave model fatals if AW2 leaks through
@@ -346,7 +353,8 @@ module axi_xbar_tb;
         if (n > 200) $fatal(1, "b2b B2 timeout");
       end while (!bvalid);
       #1 bready = 0;
-      if (wr_seen[0] != base + 2 || last_waddr[0] !== 32'h80000104)
+      if (wr_seen[0] != base + 1 || wr_seen[1] != base_dev + 1 ||
+          last_waddr[1] !== 32'h10000000)
         $fatal(1, "b2b: second write wrong");
     end
 

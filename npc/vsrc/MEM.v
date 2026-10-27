@@ -48,8 +48,7 @@ module MEM #(
 
   // Read FSM (AR/R):
   // State      Action                         Next state
-  // RD_IDLE    Accept and latch AR             ar_fire -> RD_ACCESS
-  // RD_ACCESS  Read DPI once; latch RDATA/RESP  RD_DELAY
+  // RD_IDLE    Accept AR; read once, latch R   ar_fire -> RD_DELAY
   // RD_DELAY   Wait for response delay         r_delay_done -> RD_RESP
   // RD_RESP    Hold RVALID/RDATA/RRESP          r_fire -> RD_IDLE
   // Write FSM (AW/W/B):
@@ -61,9 +60,8 @@ module MEM #(
   // All unlisted conditions hold the current state. Reset discards requests
   // and responses, but cannot undo a write already performed in WR_ACCESS.
   localparam [1:0] RD_IDLE   = 2'd0;
-  localparam [1:0] RD_ACCESS = 2'd1;
-  localparam [1:0] RD_DELAY  = 2'd2;
-  localparam [1:0] RD_RESP   = 2'd3;
+  localparam [1:0] RD_DELAY  = 2'd1;
+  localparam [1:0] RD_RESP   = 2'd2;
   localparam [1:0] WR_COLLECT = 2'd0;
   localparam [1:0] WR_ACCESS  = 2'd1;
   localparam [1:0] WR_DELAY   = 2'd2;
@@ -71,19 +69,19 @@ module MEM #(
 
   reg [1:0] rd_state, rd_next_state;
   reg [1:0] wr_state, wr_next_state;
-  reg [31:0] araddr_r, awaddr_r, wdata_r;
-  reg [2:0] arprot_r, awprot_r;
+  reg [31:0] awaddr_r, wdata_r;
+  reg [2:0] awprot_r;
   reg [3:0] wstrb_r;
   reg aw_pending, w_pending;
 
   // Full-width AXI-Lite reads return the addressed, aligned 32-bit word.
   // WSTRB selects lanes relative to the same aligned word for writes.
-  wire [31:0] rd_word_addr = {araddr_r[31:2], 2'b00};
+  wire [31:0] rd_word_addr = {s_axi_araddr[31:2], 2'b00};
   wire [31:0] wr_word_addr = {awaddr_r[31:2], 2'b00};
   // This backend distinguishes instruction/data accesses via ARPROT[2].
   // Privilege/security checks and AWPROT policy are not implemented.
-  wire unused_attributes = &{1'b0, arprot_r, awprot_r,
-                            araddr_r[1:0], awaddr_r[1:0]};
+  wire unused_attributes = &{1'b0, s_axi_arprot, awprot_r,
+                            s_axi_araddr[1:0], awaddr_r[1:0]};
 
   wire ar_delay_done, aw_delay_done, w_delay_done;
   wire r_delay_done, b_delay_done;
@@ -205,8 +203,7 @@ module MEM #(
   always @(*) begin
     rd_next_state = rd_state;
     case (rd_state)
-      RD_IDLE:   if (ar_fire) rd_next_state = RD_ACCESS;
-      RD_ACCESS: rd_next_state = RD_DELAY;
+      RD_IDLE:   if (ar_fire) rd_next_state = RD_DELAY;
       RD_DELAY:  if (r_delay_done) rd_next_state = RD_RESP;
       RD_RESP:   if (r_fire) rd_next_state = RD_IDLE;
       default:   rd_next_state = RD_IDLE;
@@ -236,25 +233,21 @@ module MEM #(
     end
   end
 
-  // Read request registers and response registers have separate enables.
-  // RDATA/RRESP are written only in RD_ACCESS, never during RD_RESP.
+  // Consume the live AR payload only on its handshake edge, as a synchronous
+  // read port does. RDATA/RRESP then remain unchanged through response stalls.
+  // In simulation, issue the read before a coincident write to match the
+  // read-first behavior of the synthesized array's nonblocking assignments.
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      araddr_r <= 32'b0;
-      arprot_r <= 3'b0;
       s_axi_rdata <= 32'b0;
       s_axi_rresp <= RESP_OKAY;
     end else begin
-      if (ar_fire) begin // 锁存 AR 通道的地址和保护属性，供后续读访问使用
-        araddr_r <= s_axi_araddr;
-        arprot_r <= s_axi_arprot;
-      end
-      if (rd_state == RD_ACCESS) begin
+      if (ar_fire) begin
         s_axi_rdata <= 32'b0;
         s_axi_rresp <= rd_access_resp;
 `ifndef SYNTHESIS
         if (rd_access_resp == RESP_OKAY) begin
-          if (arprot_r[2])
+          if (s_axi_arprot[2])
             s_axi_rdata <= pmem_ifetch(rd_word_addr);
           else
             s_axi_rdata <= pmem_read(rd_word_addr, 8'd4);
@@ -264,6 +257,10 @@ module MEM #(
           s_axi_rdata <= mem[rd_index];
 `endif
       end
+`ifndef SYNTHESIS
+      if ((wr_state == WR_ACCESS) && (wr_access_resp == RESP_OKAY))
+        dpi_write_word(wr_word_addr, wdata_r, wstrb_r);
+`endif
     end
   end
 
@@ -290,10 +287,6 @@ module MEM #(
       end
       if (wr_state == WR_ACCESS) begin
         s_axi_bresp <= wr_access_resp;
-`ifndef SYNTHESIS
-        if (wr_access_resp == RESP_OKAY)
-          dpi_write_word(wr_word_addr, wdata_r, wstrb_r);
-`endif
       end
       if (b_fire) begin
         aw_pending <= 1'b0;

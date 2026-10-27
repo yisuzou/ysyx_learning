@@ -1,15 +1,11 @@
 // Thin synthesis wrapper for the CPU core only.
-// No MEM, no UART, no platform XBAR: the CPU's external AXI4-Lite master
+// No MEM, UART, CLINT, or platform XBAR: the CPU's external AXI4-Lite master
 // becomes the top-level interface so the synthesis/STA result reflects only
 // the CPU (reg-to-reg) timing and area.
 module top #(
     parameter RANDOM_DELAY = 0,
     parameter [31:0] PMEM_BASE = 32'h80000000,
-    parameter [31:0] PMEM_SIZE = 32'h08000000,
-    parameter HAS_SERIAL = 1,
-    parameter HAS_TIMER = 1,
-    parameter [31:0] SERIAL_MMIO = 32'h10000000,
-    parameter [31:0] RTC_MMIO = 32'h10000048
+    parameter [31:0] PMEM_SIZE = 32'h08000000
 ) (
     input clk,
     input rst_n,
@@ -53,13 +49,9 @@ module top #(
 );
 
   npc_core #(
-      .RANDOM_DELAY(0),
+      .RANDOM_DELAY(RANDOM_DELAY),
       .PMEM_BASE(PMEM_BASE),
-      .PMEM_SIZE(PMEM_SIZE),
-      .HAS_SERIAL(HAS_SERIAL),
-      .HAS_TIMER(HAS_TIMER),
-      .SERIAL_MMIO(SERIAL_MMIO),
-      .RTC_MMIO(RTC_MMIO)
+      .PMEM_SIZE(PMEM_SIZE)
   ) u_cpu (
       .*
   );
