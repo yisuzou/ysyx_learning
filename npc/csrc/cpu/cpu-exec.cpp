@@ -87,6 +87,7 @@ static bool exec_once() {
                  ", resp = %u\n",
                  operation, sim_pc(), sim_bus_error_addr(),
                  sim_bus_error_resp());
+    sim_perf_note_fault(sim_bus_error_op());
     set_npc_state(NPC_ABORT, sim_pc(), -1);
     return false;
   }
@@ -104,6 +105,7 @@ static bool exec_once() {
                    "invalid instruction at pc = " FMT_WORD ", inst = " FMT_WORD
                    "\n",
                    pc, inst);
+      sim_perf_note_invalid();
       set_npc_state(NPC_ABORT, pc, -1);
       return true;
     }
@@ -167,6 +169,7 @@ static void statistic() {
     Log("PERF: inst= %" PRIu64 " cycles= %" PRIu64 " IPC= %.3f",
         g_nr_guest_inst, cycles, (double)g_nr_guest_inst / (double)cycles);
   }
+  sim_perf_report(g_nr_guest_inst);
   if (g_timer > 0) {
     Log("simulation frequency = %" PRIu64 " inst/s",
         g_nr_guest_inst * 1000000 / g_timer);

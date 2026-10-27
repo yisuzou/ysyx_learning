@@ -1,6 +1,7 @@
 `ifndef SYNTHESIS
 import "DPI-C" function void npc_ebreak(input int halt_code, input int pc);
 import "DPI-C" function void npc_reg_write(input int index, input int data);
+import "DPI-C" function void npc_perf_event(input int unsigned event_mask);
 `endif
 module npc_core #(
     parameter RANDOM_DELAY = 0,
@@ -535,6 +536,69 @@ module npc_core #(
   always @(posedge clk) begin
     if (commit && gpr_we) npc_reg_write({27'b0, rd}, gpr_wdata);
     if (commit && is_ebreak) npc_ebreak(gpr_a0, pc);
+  end
+
+  // Simulation-only performance events: one pulse per architectural event.
+  // The host accumulates the mask through DPI-C and prints it in statistic().
+  // Bits 5-7 stay clear here: bus faults and invalid decodes abort the host
+  // before another clock edge, so the host counts them at detection time.
+  localparam [2:0] PERF_GPR_EXU_RESULT = 3'd0;
+  localparam [2:0] PERF_GPR_IMMEDIATE  = 3'd2;
+  localparam [2:0] PERF_GPR_PC_IMM     = 3'd3;
+  localparam [1:0] PERF_PC_DIRECT      = 2'd0;
+  localparam [1:0] PERF_PC_TO_MEPC     = 2'd3;
+  localparam [1:0] PERF_CSR_EXU_RESULT = 2'd0;
+
+  wire perf_ifu_ar    = ifu_arvalid && ifu_arready;
+  wire perf_ifu_fetch = ifu_rvalid && ifu_rready && (ifu_rresp == 2'b00);
+  // Cycle-level: no fetched instruction is available (fetch latency/stall).
+  wire perf_ifu_idle  = rst_n && !ifu_valid;
+
+  wire perf_lsu_load  = lsu_done && !lsu_error_write;
+  wire perf_lsu_store = lsu_done && lsu_error_write;
+
+  wire perf_alu    = commit && gpr_we && (gpr_wsel == PERF_GPR_EXU_RESULT);
+  wire perf_load   = commit && mem_valid && !mem_wen;
+  wire perf_store  = commit && mem_valid && mem_wen;
+  wire perf_branch = commit && branch_en;
+  wire perf_jump   = commit && pc_we && (pc_wsel == PERF_PC_DIRECT);
+  wire perf_csr    = commit && csr_we;
+  wire perf_system = commit && (is_ecall || is_ebreak ||
+                                (pc_we && (pc_wsel == PERF_PC_TO_MEPC)));
+  wire perf_lui    = commit && gpr_we &&
+                     (gpr_wsel == PERF_GPR_IMMEDIATE) && !csr_we;
+  wire perf_auipc  = commit && gpr_we && (gpr_wsel == PERF_GPR_PC_IMM);
+  // Instructions that actually consume an EXU result: ALU, address
+  // generation, comparison, pc+imm, and the csrrs read-modify-write.
+  wire perf_exu    = perf_alu || perf_load || perf_store || perf_branch ||
+                     perf_jump || perf_auipc ||
+                     (commit && csr_we && (csr_wsel == PERF_CSR_EXU_RESULT));
+
+  wire [31:0] perf_events = {
+      13'b0,
+      perf_exu,        // 18
+      perf_auipc,      // 17
+      perf_lui,        // 16
+      perf_system,     // 15
+      perf_csr,        // 14
+      perf_jump,       // 13
+      perf_branch,     // 12
+      perf_store,      // 11
+      perf_load,       // 10
+      perf_alu,        // 9
+      commit,          // 8
+      1'b0,            // 7 invalid instruction (host)
+      1'b0,            // 6 fetch bus fault (host)
+      1'b0,            // 5 data bus fault (host)
+      perf_lsu_store,  // 4
+      perf_lsu_load,   // 3
+      perf_ifu_idle,   // 2
+      perf_ifu_fetch,  // 1
+      perf_ifu_ar      // 0
+  };
+
+  always @(posedge clk) begin
+    if (rst_n && (|perf_events)) npc_perf_event(perf_events);
   end
 `endif
 endmodule

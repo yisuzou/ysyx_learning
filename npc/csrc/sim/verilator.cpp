@@ -39,6 +39,7 @@ void sim_init() {
 
 void sim_reset(int cycles) {
   guest_cycles = 0;
+  sim_perf_reset();
   std::memset(&cpu, 0, sizeof(cpu));
   dut.clk = 0;
   dut.rst_n = 0;

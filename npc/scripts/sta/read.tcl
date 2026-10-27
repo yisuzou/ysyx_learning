@@ -26,7 +26,7 @@ set defines [list -D SYNTHESIS]
 if {$rve} { lappend defines -D CONFIG_RVE }
 
 # 不把 MEM/UART/CLINT 当黑盒；完整读取所有可能实例化的模块。
-set rtl [list vsrc/top.v vsrc/IFU.v vsrc/IDU.v vsrc/EXU.v \
+set rtl [list vsrc/top.v vsrc/npc_core.v vsrc/IFU.v vsrc/IDU.v vsrc/EXU.v \
     vsrc/BranchUnit.v vsrc/LSU.v vsrc/WBU.v vsrc/CSR.v vsrc/MEM.v \
     vsrc/random_delay.v vsrc/AXIArbiter.v vsrc/XBAR.v vsrc/UART.v vsrc/CLINT.v \
     vsrc/gpr/$isa/GPR.v]
