@@ -119,26 +119,27 @@ module XBAR #(
   wire [NUM_SLAVES-1:0] wr_decode = decode(s_axi_awaddr, 1'b0);
   // AW may already have completed while W is still pending. Live AWADDR
   // can then describe another transaction, so W must use the saved route.
-  wire [NUM_SLAVES-1:0] wr_request_sel = aw_done ? wr_sel_r : wr_decode;
-  wire wr_target_valid = aw_done || s_axi_awvalid;
-  wire wr_request_hit = |wr_request_sel;
-  wire wr_address_hit = |wr_decode;
-  wire rd_request_hit = |rd_decode;
-  wire rd_hit = |rd_sel_r;
-  wire wr_hit = |wr_sel_r;
+  wire [NUM_SLAVES-1:0] wr_request_sel = aw_done ? wr_sel_r : wr_decode; //写请求选择，aw_done为1时，选择已保存的wr_sel_r，否则选择当前的wr_decode
+  wire wr_target_valid = aw_done || s_axi_awvalid;//写请求目标有效，aw_done为1时，表示已完成AW阶段，或者s_axi_awvalid为1时，表示当前有有效的AW请求
+  wire wr_request_hit = |wr_request_sel;//写请求命中，表示当前有有效的写请求选择
+  wire wr_address_hit = |wr_decode;//写地址命中，表示当前有有效的写地址解码
+  wire rd_request_hit = |rd_decode;//读请求命中，表示当前有有效的读请求解码
+  wire rd_hit = |rd_sel_r;//读命中，表示当前有有效的读选择
+  wire wr_hit = |wr_sel_r;//写命中，表示当前有有效的写选择
   // AWPROT is forwarded only; no decode policy depends on it today.
 
-  wire rd_addr_phase = rst_n && (rd_state == RD_IDLE);
-  wire rd_resp_phase = rst_n && (rd_state == RD_RESP);
-  wire wr_data_phase = rst_n && (wr_state == WR_DATA);
-  wire wr_resp_phase = rst_n && (wr_state == WR_RESP);
+  wire rd_addr_phase = rst_n && (rd_state == RD_IDLE);//读地址阶段，表示当前处于读空闲状态
+  wire rd_resp_phase = rst_n && (rd_state == RD_RESP);//读响应阶段，表示当前处于读响应状态
+  wire wr_data_phase = rst_n && (wr_state == WR_DATA);//写数据阶段，表示当前处于写数据状态
+  wire wr_resp_phase = rst_n && (wr_state == WR_RESP);//写响应阶段，表示当前处于写响应状态
 
   // ---------------------------------------------------------------------
   // Downstream request routing: payload broadcast, VALID one-hot.
   // ---------------------------------------------------------------------
-  assign m_axi_araddr  = {NUM_SLAVES{s_axi_araddr}};
-  assign m_axi_arprot  = {NUM_SLAVES{s_axi_arprot}};
-  assign m_axi_arvalid = {NUM_SLAVES{rd_addr_phase && s_axi_arvalid}} & rd_decode;
+  assign m_axi_araddr  = {NUM_SLAVES{s_axi_araddr}};//读地址广播，所有从设备共享同一个读地址
+  assign m_axi_arprot  = {NUM_SLAVES{s_axi_arprot}};//读保护广播，所有从设备共享同一个读保护
+  assign m_axi_arvalid = {NUM_SLAVES{rd_addr_phase && s_axi_arvalid}} & rd_decode;//Nslave个端口，使用Nslave宽的decode信号
+  //↑读地址有效，只有在读地址阶段且上游有有效的读请求时，才会将读请求发送给下游设备，并且只发送给解码出的目标设备
   assign m_axi_rready  = {NUM_SLAVES{rd_resp_phase && s_axi_rready}} & rd_sel_r;
 
   assign m_axi_awaddr  = {NUM_SLAVES{s_axi_awaddr}};
@@ -174,6 +175,7 @@ module XBAR #(
     s_axi_rdata = 32'b0;
     s_axi_rresp = rd_hit ? 2'b00 : RESP_DECERR;
     s_axi_bresp = wr_hit ? 2'b00 : RESP_DECERR;
+    //选通，只有命中的从设备才会将其响应数据传递给上游主设备
     for (i = 0; i < NUM_SLAVES; i = i + 1) begin
       s_axi_rdata = s_axi_rdata | (m_axi_rdata[i*32 +: 32] & {32{rd_sel_r[i]}});
       s_axi_rresp = s_axi_rresp | (m_axi_rresp[i*2 +: 2]   & {2{rd_sel_r[i]}});
@@ -219,7 +221,9 @@ module XBAR #(
       default:                    wr_next_state = WR_DATA;
     endcase
   end
-
+  //对于xbar，它是master的从机，是从机的主机，
+  //不必考虑aw和w的顺序问题，aw和w是独立的，aw和w可以同时进行，
+  //只要aw和w都完成了，就可以进入WR_RESP状态
   // ---------------------------------------------------------------------
   // Data registers: route selection and per-channel completion flags
   // ---------------------------------------------------------------------
