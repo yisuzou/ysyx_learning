@@ -5,6 +5,7 @@ Run against either a random-delay or a no-delay NPC. The latter also permits
 exact comparisons between aligned and split accesses. Logs stay in build/.
 """
 import argparse
+import csv
 from pathlib import Path
 import re
 import subprocess
@@ -54,6 +55,69 @@ def require(condition, message):
         raise AssertionError(message)
 
 
+def check_trace(path, output):
+    """Verify each cycle's partition, completed attribution and final totals."""
+    categories = ("alu", "load", "store", "branch", "jump", "csr", "system", "lui", "auipc")
+    events = ("ar_accept", "fetched", "idle", "lsu_load", "lsu_store", "lsu_fault",
+              "ifu_fault", "invalid", "commit", *categories, "exu_used", "prepare",
+              "ar_wait", "r_wait", "execute", "lsu_wait", "fault_hold", "r_error", "lsu_hold")
+    previous = None
+    with path.open(newline="") as source:
+        reader = csv.DictReader(source)
+        for cycle, raw in enumerate(reader):
+            row = {key: int(value) for key, value in raw.items()}
+            require(row["cycle"] == cycle, "trace must contain consecutive cycles from zero")
+            if cycle == 0:
+                require(all(value == 0 for value in row.values()), "cycle zero must be all zeros")
+            if previous is not None:
+                for field in events:
+                    require(row[field] - previous[field] in (0, 1), f"invalid {field} event increment")
+                for name in categories:
+                    committed = row[name] - previous[name]
+                    expected_total = previous["pending"] + 1 if committed else 0
+                    expected_exec = previous["pending_exec"] + row["execute"] - previous["execute"] if committed else 0
+                    require(row[f"{name}_total_cycles"] - previous[f"{name}_total_cycles"] == expected_total,
+                            f"{name}: total cycles must join its category only at commit")
+                    require(row[f"{name}_exec_cycles"] - previous[f"{name}_exec_cycles"] == expected_exec,
+                            f"{name}: execution cycles must join its category only at commit")
+            fetch_phase = sum(row[key] for key in (
+                "prepare", "ar_wait", "ar_accept", "r_wait", "fetched", "r_error", "fault_hold"))
+            require(fetch_phase == row["idle"], "trace fetch-phase partition")
+            require(row["idle"] + row["execute"] == cycle, "trace active-cycle partition")
+            require(sum(row[name] for name in categories) == row["commit"], "trace instruction mix")
+            require(sum(row[f"{name}_total_cycles"] for name in categories) + row["pending"] == cycle,
+                    "trace total attribution, including unfinished instructions")
+            require(sum(row[f"{name}_exec_cycles"] for name in categories) + row["pending_exec"] == row["execute"],
+                    "trace execution attribution")
+            require(row["lsu_load_cycles"] + row["lsu_store_cycles"] + row["pending_lsu"] == row["lsu_wait"],
+                    "trace LSU latency attribution")
+            require(row["lsu_wait"] + row["lsu_load"] + row["lsu_store"] == row["lsu_hold"],
+                    "trace LSU DONE boundary")
+            previous = row
+    require(previous is not None, "empty performance trace")
+    last = previous
+    match = re.search(r"total guest cycles = (\d+)", output)
+    require(match and last["cycle"] == int(match[1]), "trace must exclude reset and shutdown clocks")
+    for match in re.finditer(r"PERF: class (\w+) count=(\d+) share=[\d.]+% total_cycles=(\d+) exec_cycles=(\d+)", output):
+        name = match[1]
+        require([last[name], last[f"{name}_total_cycles"], last[f"{name}_exec_cycles"]] == list(map(int, match.groups()[1:])),
+                f"{name}: last snapshot must match the final report")
+    for name in ("load", "store"):
+        match = re.search(rf"PERF: lsu {name} count=(\d+) latency_cycles=(\d+)", output)
+        require(match and [last[f"lsu_{name}"], last[f"lsu_{name}_cycles"]] == list(map(int, match.groups())),
+                f"{name}: final LSU trace/report mismatch")
+    match = re.search(r"PERF: fetch   ar=(\d+) fetched=(\d+) fault=(\d+) idle_cycles=(\d+)", output)
+    require(match and [last[key] for key in ("ar_accept", "fetched", "ifu_fault", "idle")] == list(map(int, match.groups())),
+            "final IFU trace/report mismatch")
+    match = re.search(r"PERF: memory  lsu_load=(\d+) lsu_store=(\d+) fault=(\d+)", output)
+    require(match and [last[key] for key in ("lsu_load", "lsu_store", "lsu_fault")] == list(map(int, match.groups())),
+            "final LSU fault trace/report mismatch")
+    match = re.search(r"PERF: retire  commit=(\d+) invalid=(\d+) exu_used=(\d+)", output)
+    require(match and [last[key] for key in ("commit", "invalid", "exu_used")] == list(map(int, match.groups())),
+            "final retirement trace/report mismatch")
+    print(f"PASS: {path.name}: {last['cycle'] + 1} snapshots, per-cycle invariants and final report")
+
+
 def run_case(args, name, *, split=0, fault=0):
     elf = args.build_dir / f"{name}.elf"
     image = elf.with_suffix(".bin")
@@ -66,6 +130,9 @@ def run_case(args, name, *, split=0, fault=0):
     subprocess.run(["riscv64-unknown-elf-objcopy", "-O", "binary", str(elf),
                     str(image)], check=True)
     command = [str(args.npc.resolve()), "-b", f"--log={args.build_dir / (name + '.log')}"]
+    trace = args.build_dir / f"{name}.csv"
+    if args.trace:
+        command.append(f"--perf-trace={trace}")
     if args.diff:
         command.append(f"--diff={args.diff.resolve()}")
     result = subprocess.run(command + [str(image)], text=True,
@@ -74,6 +141,8 @@ def run_case(args, name, *, split=0, fault=0):
     (args.build_dir / f"{name}.output").write_text(output)
     require("PERF: cycle check" in output, f"{name}: missing cycle accounting")
     require("(MISMATCH)" not in output, f"{name}: inconsistent counters\n{output}")
+    if args.trace:
+        check_trace(trace, output)
     if fault:
         require(result.returncode != 0 and "npc: ABORT" in output,
                 f"{name}: expected abort\n{output}")
@@ -118,6 +187,7 @@ def main():
     parser.add_argument("--build-dir", type=Path, default=NPC / "build/perf-tests")
     parser.add_argument("--diff", type=Path, help="optional NEMU reference shared library")
     parser.add_argument("--expect-no-delay", action="store_true")
+    parser.add_argument("--trace", action="store_true", help="also check every CSV snapshot (requires PERF_TRACE)")
     args = parser.parse_args()
     args.build_dir = args.build_dir.resolve()
     args.build_dir.mkdir(parents=True, exist_ok=True)

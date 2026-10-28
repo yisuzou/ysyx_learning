@@ -56,4 +56,10 @@ soc-test:
 perf-test:
 	$(PYTHON) perf_counters.py $(PERF_TEST_ARGS)
 
-.PHONY: test soc-test perf-test
+perf-trace-test:
+	$(PYTHON) perf_counters.py --trace $(PERF_TEST_ARGS)
+
+perf-run-test:
+	$(PYTHON) -m unittest -v test_perf_run.py
+
+.PHONY: test soc-test perf-test perf-trace-test perf-run-test
