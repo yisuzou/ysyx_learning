@@ -31,6 +31,144 @@ make -C am-kernels/benchmarks/microbench ARCH=riscv32e-npc mainargs=test ARGS=-b
 统计排除复位和仿真退出时的额外时钟。没有样本的类别输出数量 0、平均值 0，
 后者只是占位值。比例保留三位小数，极少量的 CSR/system 指令可能显示为 0.000%。
 
+## 逐周期 trace 与 matplotlib 出图
+
+在 `make -C npc menuconfig` 的 `Testing and Debugging` 中开启
+`Enable performance counters` 下的 `Trace performance counters every cycle (CSV)`
+（`CONFIG_PERF_TRACE`，默认关闭），保存后重新构建。它只依赖性能计数器，
+无需开启 `TRACE`、`ITRACE` 或 `WAVE_TRACE`。
+首次运行前先按下文准备 `npc/.venv-perf/` 中的 matplotlib；之后日常只需 `make run`。
+
+```sh
+make -C npc
+make -C npc sim IMG=/path/to/image.bin
+# 或在 AM 测试程序目录正常 make run，无需额外 ARGS 或绘图命令：
+make -C am-kernels/tests/cpu-tests ARCH=riscv32e-npc ALL=dummy run
+```
+
+开启后，`make sim` / AM `make run` 自动创建 `npc/build/perf/`，
+按镜像文件名（去掉 `.bin` 后缀）保存完整 CSV 和同名 PNG。
+例如 `dummy-riscv32e-npc.bin` 会生成：
+
+```text
+npc/build/perf/dummy-riscv32e-npc.csv
+npc/build/perf/dummy-riscv32e-npc.png
+```
+
+默认 PNG 显示第 0..200 周期的累计曲线和逐拍增量，CSV 保存全部周期。
+同一个镜像重复运行会覆盖同名产物；对比测量时自行另存。
+默认路径根据 `NPC_HOME` 定位，与启动 AM 测试的目录无关。
+可以在 `make run` / `make sim` 时用 `PERF_TRACE_FILE` 覆盖 CSV 路径，
+用 `PERF_PLOT_END=1000` 调整自动预览的结束周期。
+`ARGS` 中显式传入 `--perf-trace=FILE` 也会覆盖路径，自动绘图会跟随该路径；
+make 的运行脚本会创建所需父目录。
+即使仿真 ABORT，也会尝试绘制本轮已产生的部分 trace，并保留仿真的失败返回码。
+绘图失败时保留 CSV 并报告错误，也会移除上一轮的旧 PNG，避免误认为它属于本轮。
+
+关闭 `PERF_TRACE` 时沿用原来的运行路径，不创建 CSV 或 PNG；
+此时显式传入 `--perf-trace` 会报错，避免静默忽略。
+关闭 `PERF_COUNTERS` 会同时关闭 `PERF_TRACE`，不编译计数器或 CSV 输出逻辑。
+直接运行 `npc/build/top` 时仅采集 CSV，默认仍为工作目录下的 `build/perf.csv`；
+需要自动出图时使用 `make sim` / AM `make run`。
+
+每行是一个有效上升沿之后的**累计快照**，横坐标是 guest cycle，
+不采用主机时间或 Verilator 的半周期时间。周期 0 为全零快照；执行 N 周期后，
+文件共有 N+1 行数据及一行表头。未提交指令的周期也会记录。
+
+故障和非法指令由主机在最近的时钟沿之后检测。为把这些事件纳入正确快照，
+`npc_perf_event()` 在处理新事件之前写出上一周期的计数；`sim_finish()`
+在两个收尾时钟之前写出最后一个快照并关闭文件。这只是文件写出延后一拍，
+没有跳过采样周期或增加重复行，也不会改变仿真周期数。输出使用文件缓冲，
+不会每拍刷新文件或打印到终端。
+
+CSV 的字段如下；除 `pending*` 外，都是累计值：
+
+| 字段 | 含义 |
+|---|---|
+| `cycle` | 复位后有效周期数 |
+| `ar_accept`, `fetched`, `idle` | 取指地址握手、成功取指、取指阶段周期 |
+| `prepare`, `ar_wait`, `r_wait`, `r_error`, `fault_hold` | 取指阶段各项事件/状态周期 |
+| `execute`, `lsu_hold`, `lsu_wait` | 执行周期（包含访存）、访存指令占用周期、CPU 等待访存周期 |
+| `lsu_load`, `lsu_store` | 完成的 CPU load/store 次数 |
+| `lsu_fault`, `ifu_fault`, `invalid` | 主机检测的数据访存故障、取指故障、非法指令次数 |
+| `commit`, `exu_used` | 提交数、使用 EXU 结果的指令数 |
+| `alu` … `auipc` | 九类指令各自的提交数 |
+| `<类别>_total_cycles`, `<类别>_exec_cycles` | 在该类指令提交时归入的总周期、执行周期之和 |
+| `pending`, `pending_exec`, `pending_lsu` | 尚未完成指令的总周期、执行周期、访存等待周期；完成时清零 |
+| `lsu_load_cycles`, `lsu_store_cycles` | 已完成 CPU load/store 的延迟周期之和 |
+
+`execute` 包含访存指令周期；结束报告中无新取指原因的 `execute` 则是
+`execute - lsu_hold`。`lsu_wait` 包含未完成访问的等待，
+`lsu_load_cycles` / `lsu_store_cycles` 到访问完成时才增长。
+跨过窗口边界的访问仍在完成时一次归入全部延迟，因此完成样本平均值
+不能直接解释为这个窗口内全部等待周期的占比。
+
+首次安装 matplotlib（从仓库根目录运行）。虚拟环境保存在
+`npc/.venv-perf/`，已加入 Git 忽略，不会被 `make -C npc clean` 删除。
+创建环境和安装依赖只需首次执行；后续 `make run` 自动调用其中的 Python，
+不需要激活环境。
+
+```sh
+python3 -m venv npc/.venv-perf
+npc/.venv-perf/bin/python -m pip install matplotlib
+```
+
+CSV 和 PNG 是可重新生成的运行产物，默认仍保存在 `npc/build/`，
+执行 `make -C npc clean` 时会删除。需要对比时自行复制到其他目录。
+
+也可以手动重画 CSV 的其他范围或字段。绘图默认选择
+`commit fetched prepare ar_wait r_wait lsu_wait`：
+
+```sh
+npc/.venv-perf/bin/python npc/scripts/plot_perf.py npc/build/perf/dummy-riscv32e-npc.csv \
+  --start 20 --end 120 --counters commit load store lsu_wait \
+  --mode both --output npc/build/perf-memory.png
+```
+
+`--start` / `--end` 均含端点；省略时读取全部 trace。
+`--mode` 可选 `cumulative`、`delta` 或 `both`（默认）。
+增量由所选范围内相邻快照相减得到，因此范围第一行不显示增量。
+`pending*` 在完成时下降，其增量允许为负；其余累计字段应单调不减。
+脚本使用 Agg 后端，无需桌面环境。
+
+初次检查建议使用下方短程序和前几百周期，确认：
+
+- `commit` 仅在提交时增加，取指或访存等待时保持水平。
+- 等待期间 `ar_wait`、`r_wait` 或 `lsu_wait` 对应字段每拍增加 1。
+- 指令周期只在提交时归入对应类别；提交前仍在 `pending*` 中。
+- 最后一行与结束报告一致，故障样本的未完成工作也保留在 `pending*` 中。
+
+trace 会增加文件大小和主机运行时间；需要完整程序 trace 时仍逐周期保存，
+绘图阶段通过周期范围选择要查看的部分。
+
+```sh
+# 要求构建时已开启 PERF_TRACE。
+make -C npc/tests perf-trace-test PERF_TEST_ARGS="--expect-no-delay"
+# 随机延迟开启时去掉 --expect-no-delay；也可以添加 --diff REF_SO。
+```
+
+这项测试覆盖对齐/跨字访问、load/store/取指故障和非法指令。
+它逐行验证周期连续、事件增量、各项周期守恒、类别归属时刻，
+并核对最后快照与结束报告，检查复位和收尾时钟没有混入。
+
+2026-10-28 验证：固定延迟、随机延迟 + Difftest 各 6 个用例全部通过；
+trace 关闭时原有 6 个计数用例也通过。另验证零周期退出、SDB 单步后继续、
+默认/自选路径、文件写入失败，以及绘图的三种模式和范围筛选。
+计数器完全关闭时也通过构建和运行检查。跨字短程序的
+[CSV](../build/perf-trace-validation/fixed/split.csv) 与
+[示例 PNG](../build/perf-trace-validation/split.png) 保存在本地 build 目录。
+
+自动运行链的专项回归（需要 `npc/.venv-perf/` 已安装 matplotlib）：
+
+```sh
+make -C npc/tests perf-run-test
+```
+
+覆盖自动命名/输出目录、自选路径和预览范围、关闭开关、失败返回码、旧产物处理，
+以及 `clean` 删除产物但保留 Python 环境。真实 AM `dummy` 的 `make run` 已在
+开启 trace 的 NPC 测试副本中实跑通过，并自动产生完整 CSV 和前 200 周期 PNG；
+本次 2,423 条指令、13,474 周期，CSV 共 13,475 行数据，所有计数检查均为 OK。
+
 ## 指令类别与周期口径
 
 沿用原有九类：`alu/load/store/branch/jump/csr/system/lui/auipc`。

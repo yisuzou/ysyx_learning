@@ -5,6 +5,9 @@
 
 #include <cinttypes>
 #include <cstdint>
+#ifdef CONFIG_PERF_TRACE
+#include <cerrno>
+#endif
 
 // Bit layout must match perf_events in npc_core.v. Bits 5-7 are never set by
 // RTL: those abort-path events are counted by the host at detection time.
@@ -64,7 +67,78 @@ static uint64_t lsu_store_cycles;
 
 static bool event(unsigned mask, PerfEvent id) { return mask & (1u << id); }
 
+#ifdef CONFIG_PERF_TRACE
+static const char *trace_path = "build/perf.csv";
+static FILE *trace_file;
+static char trace_buffer[1024 * 1024];
+// Keep the column order identical to PerfEvent. Cycle is the first column.
+static constexpr const char *event_names[] = {
+    "ar_accept", "fetched", "idle", "lsu_load", "lsu_store", "lsu_fault",
+    "ifu_fault", "invalid", "commit", "alu", "load", "store", "branch",
+    "jump", "csr", "system", "lui", "auipc", "exu_used", "cycle",
+    "prepare", "ar_wait", "r_wait", "execute", "lsu_wait", "fault_hold",
+    "r_error", "lsu_hold",
+};
+static_assert(ARRLEN(event_names) == PERF_NR);
+
+static void trace_error() {
+  std::fprintf(stderr, "cannot write performance trace '%s': %s\n", trace_path,
+               std::strerror(errno));
+  std::exit(EXIT_FAILURE);
+}
+
+bool sim_perf_trace_set_path(const char *path) {
+  if (path == nullptr || *path == '\0' || trace_file != nullptr) return false;
+  trace_path = path;
+  return true;
+}
+
+static void trace_snapshot() {
+  if (trace_file == nullptr) return;
+  std::fprintf(trace_file, "%" PRIu64, perf_counts[PERF_CYCLE]);
+  for (unsigned i = 0; i < PERF_NR; ++i) {
+    if (i != PERF_CYCLE) std::fprintf(trace_file, ",%" PRIu64, perf_counts[i]);
+  }
+  for (const auto &cycles : category_cycles) {
+    std::fprintf(trace_file, ",%" PRIu64 ",%" PRIu64, cycles.total, cycles.execute);
+  }
+  std::fprintf(trace_file, ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64
+               ",%" PRIu64 "\n", pending_cycles, pending_execute_cycles,
+               pending_lsu_cycles, lsu_load_cycles, lsu_store_cycles);
+  if (std::ferror(trace_file)) trace_error();
+}
+
+void sim_perf_trace_close() {
+  if (trace_file == nullptr) return;
+  // The last active edge has no following edge to emit its snapshot. Host
+  // fault/invalid detection may have updated its counters in the meantime.
+  trace_snapshot();
+  FILE *file = trace_file;
+  trace_file = nullptr;
+  if (std::fclose(file) != 0) trace_error();
+}
+
+static void trace_open() {
+  trace_file = std::fopen(trace_path, "w");
+  if (trace_file == nullptr) trace_error();
+  std::setvbuf(trace_file, trace_buffer, _IOFBF, sizeof(trace_buffer));
+  std::fputs("cycle", trace_file);
+  for (unsigned i = 0; i < PERF_NR; ++i) {
+    if (i != PERF_CYCLE) std::fprintf(trace_file, ",%s", event_names[i]);
+  }
+  for (const auto *name : category_names) {
+    std::fprintf(trace_file, ",%s_total_cycles,%s_exec_cycles", name, name);
+  }
+  std::fputs(",pending,pending_exec,pending_lsu,lsu_load_cycles,lsu_store_cycles\n",
+             trace_file);
+  if (std::ferror(trace_file)) trace_error();
+}
+#endif
+
 void sim_perf_reset() {
+#ifdef CONFIG_PERF_TRACE
+  sim_perf_trace_close();
+#endif
   for (auto &count : perf_counts) {
     count = 0;
   }
@@ -73,9 +147,18 @@ void sim_perf_reset() {
   }
   pending_cycles = pending_execute_cycles = pending_lsu_cycles = 0;
   lsu_load_cycles = lsu_store_cycles = 0;
+#ifdef CONFIG_PERF_TRACE
+  trace_open();
+#endif
 }
 
 extern "C" void npc_perf_event(unsigned event_mask) {
+#ifdef CONFIG_PERF_TRACE
+  // Emit the previous cycle before changing it. This starts with cycle zero
+  // and lets host-side fault detection join the most recent edge's snapshot.
+  // close() writes the final row before the simulator's shutdown clocks.
+  trace_snapshot();
+#endif
   const unsigned events = event_mask;
   while (event_mask != 0) {
     // __builtin_ctz 返回最低位 1 的下标

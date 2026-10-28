@@ -54,6 +54,19 @@ config PERF_COUNTERS
     this option to remove event collection and the detailed output.
     Basic instruction/cycle counts and IPC are always reported.
 
+config PERF_TRACE
+  depends on PERF_COUNTERS
+  bool "Trace performance counters every cycle (CSV)"
+  default n
+  help
+    Record cumulative performance counters once per active guest cycle,
+    including a zero snapshot after reset. make sim / AM make run save CSV
+    and a PNG preview in npc/build/perf/, named after the image.
+    Plotting uses npc/.venv-perf/bin/python; install matplotlib
+    there once. PERF_TRACE_FILE and PERF_PLOT_END override the output file
+    and preview range. This can produce large files and slow host simulation.
+    It does not require instruction or FST waveform tracing.
+
 config TRACE
   bool "Enable tracers"
   default y

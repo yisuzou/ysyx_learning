@@ -43,6 +43,27 @@ The former `ITRACE=`, `FTRACE=`, `MTRACE=`, and `TRACE_FLAGS=` Make variables
 are rejected instead of being silently ignored; select their Kconfig
 equivalents.
 
+Enable **Testing and Debugging -> Enable performance counters -> Trace
+performance counters every cycle (CSV)** (`PERF_TRACE`, default off) to record
+CSV and a PNG preview automatically when running an image. From an AM test
+directory, the normal `make ARCH=riscv32e-npc run` is sufficient. Results go to
+`npc/build/perf/<image-name>.csv` and `.png`; the preview shows cycles 0..200.
+It is independent of instruction and FST tracing. Set up the plotting
+environment once, from the repository root:
+
+```sh
+python3 -m venv npc/.venv-perf
+npc/.venv-perf/bin/python -m pip install matplotlib
+make -C npc sim IMG=/path/to/image.bin
+```
+
+The `npc/.venv-perf/` environment survives `make -C npc clean`; CSV and PNG
+are generated artifacts and are removed by clean. `PERF_TRACE_FILE` overrides
+the CSV path and `PERF_PLOT_END` changes the preview's last cycle. The plot
+contains cumulative counts and per-cycle increments. See
+[performance counters](docs/performance-counters.md) for Python setup, CSV
+fields, sampling boundaries, and focused trace tests.
+
 The **Run in batch mode by default** Kconfig option controls whether the
 default simulator arguments include `-b`. With the default configuration,
 running an image immediately enters batch execution:

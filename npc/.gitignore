@@ -7,6 +7,8 @@
 !scripts/regress.sh
 !scripts/perf.sh
 !scripts/perf_record.py
+!scripts/plot_perf.py
+!scripts/run_perf.py
 !scripts/sta/
 !scripts/sta/**
 scripts/sta/__pycache__/
@@ -35,6 +37,7 @@ scripts/sta/__pycache__/
 !configs/
 !configs/*
 build/
+/.venv-perf/
 .config
 .config.old
 include/config/

@@ -43,4 +43,11 @@ static inline void sim_perf_report(uint64_t) {}
 static inline void sim_perf_note_invalid() {}
 static inline void sim_perf_note_fault(unsigned) {}
 #endif
+#ifdef CONFIG_PERF_TRACE
+bool sim_perf_trace_set_path(const char *path);
+void sim_perf_trace_close();
+#else
+static inline bool sim_perf_trace_set_path(const char *) { return false; }
+static inline void sim_perf_trace_close() {}
+#endif
 #endif

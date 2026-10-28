@@ -66,6 +66,7 @@ void sim_exec_once() {
 uint64_t sim_cycle_count() { return guest_cycles; }
 
 void sim_finish() {
+  sim_perf_trace_close();
   sim_exec_once();
   sim_exec_once();
   dut.final();

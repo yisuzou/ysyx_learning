@@ -28,6 +28,7 @@ static void usage(const char *program) {
   std::printf("\t-l,--log=FILE           output log to FILE\n");
   std::printf("\t-d,--diff=REF_SO        run DiffTest with reference REF_SO\n");
   std::printf("\t-p,--port=PORT          run DiffTest with port PORT\n");
+  std::printf("\t   --perf-trace=FILE    CSV output path (requires PERF_TRACE)\n");
   std::printf(
       "\t-e,--elf=FILE           load function symbols from ELF FILE\n");
   std::printf("\t-h,--help               display this help and exit\n");
@@ -39,6 +40,7 @@ static void parse_args(int argc, char **argv) {
                           {"diff", required_argument, nullptr, 'd'},
                           {"port", required_argument, nullptr, 'p'},
                           {"elf", required_argument, nullptr, 'e'},
+                          {"perf-trace", required_argument, nullptr, 256},
                           {"help", no_argument, nullptr, 'h'},
                           {nullptr, 0, nullptr, 0}};
   int option;
@@ -56,6 +58,12 @@ static void parse_args(int argc, char **argv) {
       break;
     case 'e':
       elf_file = optarg;
+      break;
+    case 256:
+      if (!sim_perf_trace_set_path(optarg)) {
+        std::fprintf(stderr, "--perf-trace requires CONFIG_PERF_TRACE=y and a nonempty path\n");
+        std::exit(EXIT_FAILURE);
+      }
       break;
     case 'p': {
       char *end = nullptr;
