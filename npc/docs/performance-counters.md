@@ -24,8 +24,8 @@ make -C am-kernels/benchmarks/microbench ARCH=riscv32e-npc mainargs=test ARGS=-b
 开启性能计数器时，仿真结束自动输出：
 
 - `PERF: class`：各类已提交指令的数量、比例和平均周期。
-- `PERF: no-fetch`：没有成功接收到新指令的周期，及其原因分布。
-- `PERF: lsu`：完成的 CPU 访存操作的平均延迟，分别统计 load/store。
+- `PERF: no-deliver`：没有成功把指令交付给 IDU 的周期，及其原因分布。
+- `PERF: lsu`：完成的 CPU 访存操作在 EXU 内等待 LSU 的平均周期，分别统计 load/store。
 - `PERF: check` / `PERF: cycle check`：指令数和周期数的自洽性检查。
 
 统计排除复位和仿真退出时的额外时钟。没有样本的类别输出数量 0、平均值 0，
@@ -86,9 +86,12 @@ CSV 的字段如下；除 `pending*` 外，都是累计值：
 | 字段 | 含义 |
 |---|---|
 | `cycle` | 复位后有效周期数 |
-| `ar_accept`, `fetched`, `idle` | 取指地址握手、成功取指、EX 空闲周期 |
-| `prepare`, `no_req`, `ar_wait`, `r_wait`, `r_error`, `hold`, `fault_hold` | 前端各项事件/状态周期；与 EX 周期可重叠 |
-| `execute`, `lsu_hold`, `lsu_wait` | EX 占用周期（包含访存）、访存指令占用周期、CPU 等待访存周期 |
+| `ar_accept`, `fetched` | 取指 AR 握手、成功接收 R 响应 |
+| `deliver` | IFU 向 IDU 的消息握手（`fi_valid && fi_ready`） |
+| `wait_pc`, `id_hold`, `ar_wait`, `r_wait`, `r_error`, `fault_hold` | 前端其余状态周期；与 `ar_accept`、`fetched`、`deliver` 一起构成前端分区 |
+| `backend_idle`, `execute` | 后端空闲周期、后端被占用周期（IDU/EXU/WBU 任一持有消息） |
+| `lsu_wait` | EXU 等待 LSU 的周期（MEM_REQ 与 MEM_WAIT） |
+| `wb_wait_pc`, `exu_wait_wb` | WBU 已可提交但 IFU 未接收下一 PC、EXU 持有结果但 WBU 未接收；均含在 `execute` 内 |
 | `lsu_load`, `lsu_store` | 完成的 CPU load/store 次数 |
 | `lsu_fault`, `ifu_fault`, `invalid` | 主机检测的数据访存故障、取指故障、非法指令次数 |
 | `commit`, `exu_used` | 提交数、使用 EXU 结果的指令数 |
@@ -97,8 +100,8 @@ CSV 的字段如下；除 `pending*` 外，都是累计值：
 | `pending`, `pending_exec`, `pending_lsu` | 尚未完成指令的总周期、执行周期、访存等待周期；完成时清零 |
 | `lsu_load_cycles`, `lsu_store_cycles` | 已完成 CPU load/store 的延迟周期之和 |
 
-`execute` 包含访存指令周期。`lsu_wait` 包含未完成访问的等待，
-`lsu_load_cycles` / `lsu_store_cycles` 到访问完成时才增长。
+`execute` 包含当前消息在 IDU、EXU（包括访存等待）和 WBU 中占用的全部周期。
+`lsu_wait` 是它的子集，`lsu_load_cycles` / `lsu_store_cycles` 到访问完成时才增长。
 跨过窗口边界的访问仍在完成时一次归入全部延迟，因此完成样本平均值
 不能直接解释为这个窗口内全部等待周期的占比。
 
@@ -116,7 +119,7 @@ CSV 和 PNG 是可重新生成的运行产物，默认仍保存在 `npc/build/`�
 执行 `make -C npc clean` 时会删除。需要对比时自行复制到其他目录。
 
 也可以手动重画 CSV 的其他范围或字段。绘图默认选择
-`commit fetched prepare ar_wait r_wait lsu_wait`：
+`commit fetched wait_pc ar_wait r_wait lsu_wait`：
 
 ```sh
 npc/.venv-perf/bin/python npc/scripts/plot_perf.py npc/build/perf/dummy-riscv32e-npc.csv \
@@ -133,7 +136,7 @@ npc/.venv-perf/bin/python npc/scripts/plot_perf.py npc/build/perf/dummy-riscv32e
 初次检查建议使用下方短程序和前几百周期，确认：
 
 - `commit` 仅在提交时增加，取指或访存等待时保持水平。
-- 等待期间 `ar_wait`、`r_wait` 或 `lsu_wait` 对应字段每拍增加 1。
+- 等待期间 `wait_pc`、`ar_wait`、`r_wait` 或 `lsu_wait` 对应字段每拍增加 1。
 - 指令周期只在提交时归入对应类别；提交前仍在 `pending*` 中。
 - 最后一行与结束报告一致，故障样本的未完成工作也保留在 `pending*` 中。
 
@@ -178,86 +181,117 @@ make -C npc/tests perf-run-test
 | `count` | 该类别成功提交的指令数 |
 | `share` | `count / 全部成功提交的指令数` |
 | `total_cycles` | 从前一条提交到该类指令提交的周期之和；首条从复位释放后计数 |
-| `exec_cycles` | 该类指令从进入 EX 到提交所占用的周期之和；包括提交拍 |
-| `avg_total` | `total_cycles / count`，包括未被前一条执行隐藏的前端等待 |
+| `exec_cycles` | 该类指令在后端占用的周期之和：IDU 持有、EXU 执行/访存等待/等待 WBU、WBU 提交 |
+| `avg_total` | `total_cycles / count`，即相邻提交间隔 |
 | `avg_exec` | `exec_cycles / count`；访存指令包括等待 LSU |
-| `avg_fetch` | `(total_cycles - exec_cycles) / count`，即未被隐藏的前端等待，不是完整取指延迟 |
+| `avg_fetch` | `(total_cycles - exec_cycles) / count`，即两次提交之间未被后端占用的前端周期 |
 
-IFU 与 EX 已解耦：IFU 有一个响应缓冲，EX 仍严格一次执行一条指令。非控制流指令
-执行期间可以预取 `pc+4`，因此取指周期与当前 EX 周期可以重叠。控制流指令执行期间
-不预取，提交后从更新后的 PC 冷取指。`total_cycles` 仍是提交间隔，不能解释为从该条
-指令实际发出 AR 到提交的完整私有延迟；需要后者时必须给每条指令关联时间戳。
+当前实现严格单在途：IFU 只有在 WBU 提交并交出下一 PC 后才发起下一次取指，
+IDU、EXU、WBU 依次持有同一条消息。没有推测取指，也没有 flush，因此
+`total_cycles` 不能解释为单条指令从发出 AR 到提交的私有延迟；需要后者时必须
+给每条指令关联时间戳。
+
+无随机延迟的定向序列中，每条非访存指令固定经历四个后端周期：IDU 满且 EXU
+接收（1 拍）、EXU EXEC（1 拍）、EXU SEND_WB（1 拍）、WBU 满并提交（1 拍）。
+访存指令在 EXEC 后增加 MEM_REQ 与 MEM_WAIT，直到 `rsp_fire`；SEND_WB 与提交
+仍是固定各 1 拍。因此无延迟时满足：
+
+```text
+非访存类别：exec_cycles = 4 * count
+访存类别：  exec_cycles = 4 * count + latency_cycles
+```
+
+对齐 load/store 的 `latency_cycles` 为 7/8，对应 `exec_cycles` 为 11/12；
+跨字访问的第二拍分别再增加 4/5 个等待周期。
 
 C++ 先累积当前提交间隔，在提交时归入对应类别。异常或中止前尚未提交的工作保留在
-`pending` / `pending_exec`，不进入完成样本的平均值。仿真结束时，成功取指但尚未进入
-已提交/故障集合的 EX/缓冲项由 `pending_prefetch` 单独报告，数量只能为 0、1 或 2；
-正常结束和故障结束通常不超过 1，主动退出时可能 EX 与 IFU 各保留一条。
+`pending` / `pending_exec`，不进入完成样本的平均值。
 
-## IFU 的负事件
+## 前端与后端分区
 
-本报告的 `no-fetch` 定义是**本周期没有成功的取指 R 握手**，
-即活跃周期内 `!(ifu_rvalid && ifu_rready && ifu_rresp == OKAY)`。
-它包含正在执行当前指令的周期。
-
-`idle_cycles` 则是 `!ex_valid`，表示后端没有正在执行的指令。它与前端是否正在
-取指无关；前端和 EX 可以同拍分别处于工作状态。
+`deliver` 是 IFU 向 IDU 交付指令的消息握手（`fi_valid && fi_ready`）。
+没有交付的活跃周期按互斥状态分解为：
 
 | 原因 | 检测条件 / 含义 |
 |---|---|
-| `prepare` | IFU 空闲、允许请求，处于请求准备及可能的人工延迟 |
-| `no_req` | IFU 空闲但请求被禁止；当前 EX 正在执行控制流指令 |
+| `wait_pc` | IFU 处于 WAIT_PC，等待 WBU 提交后交出下一 PC |
+| `id_hold` | `fi_valid && !fi_ready`，已取得指令但 IDU 未接收（当前结构下恒为 0，保留检查） |
 | `ar_wait` | `ifu_arvalid && !ifu_arready`，地址尚未被下游接受 |
-| `ar_accept` | AR 握手成功；本拍还没返回指令，但已取得进展 |
+| `ar_accept` | AR 握手成功 |
 | `r_wait` | `ifu_rready && !ifu_rvalid`，正在期待响应 |
+| `fetched` | 成功接收 R 响应 |
 | `r_error` | 接收到了错误的 R 响应，未得到可执行指令 |
-| `hold` | 成功响应已填入缓冲，等待 EX 空闲并接收 |
-| `fault_hold` | 错误响应留在缓冲；等待较老指令完成并接收错误项，或等待主机中止 |
+| `fault_hold` | 取指故障保持；等待主机中止 |
 
-上述原因互斥并覆盖所有 `no-fetch` 周期。加上成功取指的 `fetched` 拍后，
-它们构成覆盖全部活跃周期的前端状态分区；`idle + execute` 则是另一组独立的后端分区。
-`share_no_fetch` 的分母是所有无新指令周期，`share_all` 的分母是所有活跃周期。
-这些是周期占比，不是每条指令遭遇某事件的概率。
+加上 `deliver` 后，九个状态互斥并覆盖全部活跃周期。`share_no_deliver` 的分母是
+所有无交付周期，`share_all` 的分母是所有活跃周期。这些是周期占比，不是每条
+指令遭遇某事件的概率。`wait_pc` 包含等待上一条指令提交并交出 PC 的时间，
+不是取指准备延迟；`ar_wait` 包含仲裁、译码和下游 READY，不能仅凭它就断言有主机争用。
 
-`prepare` 即使关闭随机延迟也有固定的请求准备拍。
-`ar_wait` 包含总线状态机、仲裁、译码和下游 READY 等因素，不能仅凭它就断言有主机争用；
-`r_wait` 也不能直接等同于内存芯片本身的访问时间。
-`ar_accept`、正常执行和 DONE 都不是可以直接删除的“浪费”。
+后端分区为 `backend_idle + execute = 活跃周期`，其中
+`execute = de_valid || exu_busy || retire_pending`。`wb_wait_pc`
+（`pc_valid && !pc_ready`）是 `retire_pending` 的子集，`exu_wait_wb`
+（SEND_WB 且 `!out_ready`）是 `exu_busy` 的子集；它们与 `execute` 重叠，
+不能与分区相加。
 
 ## LSU 延迟
 
-延迟定义为 CPU 请求有效到 LSU 结果就绪所覆盖的周期数：
-在 `lsu_request && !lsu_done` 的每个周期加一，**包括 LSU 的 IDLE 接受请求拍，
-排除最后的 DONE 提交拍**。它是 CPU 侧等待时间，不是仅从 AR 握手到 R 握手的总线响应时间。
+延迟定义为 EXU 发出访存请求到收到响应之间等待的周期数：EXU 处于 MEM_REQ 或
+MEM_WAIT 的每个周期加一，**包括请求被 LSU 接收的 MEM_REQ 拍，排除 EXEC、
+SEND_WB 和提交拍**。它是 CPU 侧等待时间，不是仅从 AR 握手到 R 握手的总线响应时间。
 
 一次 CPU load/store 即一个样本，包含地址检查、发起准备、AXI 握手与响应，
-也包含跨字访问拆成两笔 AXI 事务的全部时间。C++ 到 `lsu_done` 才把累计值归入
+也包含跨字访问拆成两笔 AXI 事务的全部时间。C++ 到 `rsp_fire` 才把累计值归入
 load/store 的完成样本，发生故障的未完成访问保留为 `pending_lsu`。
 
-在当前串行结构下，成功访存指令满足：
+在当前单在途结构下，无额外背压时成功访存指令满足：
 
 ```text
-该类 exec_cycles = 该类 LSU latency_cycles + 该类完成指令数
+该类 exec_cycles = 4 * 该类完成指令数 + 该类 LSU latency_cycles
 ```
 
-其中每条指令多出来的一拍是 DONE 提交拍。
+四个固定周期分别属于 IDU 接收、EXEC、SEND_WB 和提交。
 
 ## 周期自洽性
 
-除原有指令类别总数、取指数、提交数检查外，新增检查：
+除指令类别总数、取指数、提交数检查外，报告还检查：
 
 ```text
 采样周期数 = sim_cycle_count()
-前端状态分解之和（包括成功响应拍）= 采样周期数
-idle_cycles + execute_cycles = 采样周期数
-所有 no-fetch 原因之和 = 采样周期数 - 成功取指数
+前端状态分解之和（含 ar_accept/fetched/deliver）= 采样周期数
+backend_idle + execute = 采样周期数
+所有 no-deliver 原因之和 = 采样周期数 - deliver
 所有类别 total_cycles 之和 + pending = 采样周期数
-所有类别 exec_cycles 之和 + pending_exec = execute_cycles
-已完成 LSU 延迟之和 + pending_lsu = lsu_wait_cycles
-lsu_wait_cycles + LSU 完成数 = lsu_hold_cycles
-fetched = commit + invalid + lsu_fault + pending_prefetch（结束时 pending_prefetch 为 0..2）
+所有类别 exec_cycles 之和 + pending_exec = execute
+已完成 LSU 延迟之和 + pending_lsu = lsu_wait
+fetched = deliver = commit + invalid + lsu_fault
 ```
 
-## 2026-10-27：microbench test 实测
+## 专项回归
+
+以下专项测试需要开启 `CONFIG_PERF_COUNTERS`。
+
+```sh
+make -C npc/tests perf-test PERF_TEST_ARGS="--diff $NEMU_HOME/build/riscv32-nemu-interpreter-so"
+make -C npc/tests perf-test PERF_TEST_ARGS="--npc /tmp/npc-perf-no-delay --expect-no-delay --diff $NEMU_HOME/build/riscv32-nemu-interpreter-so --build-dir $NPC_HOME/build/perf-tests-no-delay"
+```
+
+`tests/perf_counters.py` 编译已知 RV32E 指令序列，校验全部九类的确切次数、
+非访存指令后端占用 4 拍，以及访存类别 `exec_cycles = 4 * count + latency_cycles`
+的边界。无随机延迟断言按固定指令序列检查精确周期：对齐 load/store 为 11/12 拍，
+跨字第二拍再增加 4/5 拍。另覆盖 load 故障、store 故障、取指故障和非法指令，
+验证未完成工作不污染平均值。`ifu_backpressure_tb.sv` 单独检查 AR 稳定性、响应反压
+和错误延后消费；`rv_stability_check` 在每次仿真中检查 fi/de/ew 消息在 stall 期间
+保持不变。两种延迟配置均通过；cpu-tests 在随机延迟和 Difftest 开启下全部 PASS，
+所有运行的计数器检查均无 `MISMATCH`。
+
+## 历史测量（消息式重构前）
+
+下文两节记录消息式多周期重构之前的构建。字段名和周期口径按当时实现解释
+（`prepare`、`no_req`、`hold`、`lsu_hold`、`idle_cycles`，非访存指令执行 1 拍，
+并允许预取），不能用于当前 CSV 或结束报告。
+
+### 2026-10-27：microbench test 实测
 
 这是基于 `7278cbb6cb58` 加本次工作区改动的功能与计数验证，未追加正式 STA 性能台账。
 负载为 `microbench test`，RV32E、GCC 13.3.0、Verilator 5.048、Difftest 开启。
@@ -331,25 +365,7 @@ make -C npc CONFIG_RANDOM_DELAY= OBJ_DIR=/tmp/npc-perf-no-delay-obj BINARY=/tmp/
   am-kernels/benchmarks/microbench/build/microbench-riscv32e-npc.bin
 ```
 
-## 专项回归
-
-以下专项测试需要开启 `CONFIG_PERF_COUNTERS`。
-
-```sh
-make -C npc/tests perf-test PERF_TEST_ARGS="--diff $NEMU_HOME/build/riscv32-nemu-interpreter-so"
-make -C npc/tests perf-test PERF_TEST_ARGS="--npc /tmp/npc-perf-no-delay --expect-no-delay --diff $NEMU_HOME/build/riscv32-nemu-interpreter-so --build-dir $NPC_HOME/build/perf-tests-no-delay"
-```
-
-`tests/perf_counters.py` 编译已知 RV32E 指令序列，校验全部九类的确切次数、
-非访存指令执行 1 拍，以及 LSU 延迟与执行时间的边界。解耦后不再要求每条指令都有
-固定取指间隔：预取完全隐藏时 `total_cycles == exec_cycles` 合法。当前无随机延迟断言
-按固定指令序列检查各类精确总周期；其中 load 每拍执行时间与串行版本相比多 1 拍，
-来自 IFU/LSU 读读仲裁，store 不变。另覆盖 load 故障、store 故障、取指故障和非法指令，
-验证未完成工作不污染平均值。`axi_ifu_tb.sv` 单独检查 AR 稳定性、响应反压和错误延后消费。
-两种延迟配置均通过；35 项 cpu-tests 在随机延迟和 Difftest 开启下全部 PASS，
-所有运行的计数器检查均无 `MISMATCH`。
-
-## 2026-10-29：IFU/EX 解耦（P0）实测
+## 2026-10-29：IFU/EX 解耦（P0）实测（重构前）
 
 本轮工作区将 IFU 改为一项响应缓冲，在 core 增加 EX 指令/错误寄存器，允许
 非控制流指令执行时预取 `pc+4`，并允许老指令提交与新指令进入 EX 同拍完成。
