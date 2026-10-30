@@ -4,7 +4,7 @@ import argparse
 import csv
 from pathlib import Path
 
-DEFAULT_COUNTERS = ("commit", "fetched", "prepare", "ar_wait", "r_wait", "lsu_wait")
+DEFAULT_COUNTERS = ("commit", "fetched", "wait_pc", "ar_wait", "r_wait", "lsu_wait")
 
 
 def read_trace(path, counters, start, end):

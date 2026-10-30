@@ -26,10 +26,11 @@ set defines [list -D SYNTHESIS]
 if {$rve} { lappend defines -D CONFIG_RVE }
 
 # 不把 MEM/UART/CLINT 当黑盒；完整读取所有可能实例化的模块。
-set rtl [list vsrc/top.v vsrc/npc_core.v vsrc/IFU.v vsrc/IDU.v vsrc/EXU.v \
-    vsrc/BranchUnit.v vsrc/LSU.v vsrc/WBU.v vsrc/CSR.v vsrc/MEM.v \
-    vsrc/random_delay.v vsrc/AXIArbiter.v vsrc/XBAR.v vsrc/UART.v vsrc/CLINT.v \
-    vsrc/gpr/$isa/GPR.v]
+# rv_stability_check 只在 `ifndef SYNTHESIS` 下实例化且使用 $display，不加入综合。
+set rtl [list vsrc/top.v vsrc/npc_core.v vsrc/IFU.v vsrc/IDU.v vsrc/idu_stage.v \
+    vsrc/EXU.v vsrc/exu_stage.v vsrc/BranchUnit.v vsrc/LSU.v vsrc/WBU.v \
+    vsrc/CSR.v vsrc/MEM.v vsrc/random_delay.v vsrc/AXIArbiter.v vsrc/XBAR.v \
+    vsrc/UART.v vsrc/CLINT.v vsrc/gpr/$isa/GPR.v]
 
 # -defer 延迟生成 RTLIL，hierarchy 再按实例参数生成 $paramod 专用模块。
 # 保存/清空/恢复前端默认参数，防止 -defer 泄漏到后续 techmap 的内部模板读取。
