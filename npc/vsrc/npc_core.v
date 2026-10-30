@@ -53,76 +53,210 @@ module npc_core #(
     input         m_axi_bvalid,
     output        m_axi_bready
 );
-  wire [31:0] pc, ifu_inst;
-  wire ifu_valid, lsu_done;
-  wire ifu_error, lsu_error, lsu_error_write;
-  wire [31:0] ifu_error_addr, lsu_error_addr;
-  wire [1:0] ifu_error_resp, lsu_error_resp;
-  assign debug_pc = pc;
-  assign debug_inst = ifu_inst;
+  // ===========================================================================
+  // Stage-to-stage messages.  Each valid/payload has exactly one producer;
+  // each ready has exactly one consumer.
+  // ===========================================================================
+  // IFU -> IDU.
+  wire        fi_valid;
+  wire        fi_ready;
+  wire [31:0] fi_pc;
+  wire [31:0] fi_inst;
+
+  // IFU sticky fault.
+  wire        ifu_error;
+  wire [1:0]  ifu_error_resp;
+  wire [31:0] ifu_error_addr;
+
+  // IDU -> EXU (de = decode).
+  wire        de_valid;
+  wire        de_ready;
+  wire [31:0] de_pc;
+  wire [31:0] de_inst;
+  wire        de_illegal;
+  wire [ 4:0] de_rd;
+  wire [ 4:0] de_rs1;
+  wire [ 4:0] de_rs2;
+  wire [31:0] de_rs1_value;
+  wire [31:0] de_rs2_value;
+  wire [31:0] de_a0;
+  wire [31:0] de_imm;
+  wire [31:0] de_csr_old;
+  wire [31:0] de_mtvec;
+  wire [ 1:0] de_src_sel;
+  wire [ 3:0] de_exu_op;
+  wire        de_pc_we;
+  wire [ 1:0] de_pc_wsel;
+  wire        de_branch_en;
+  wire [ 2:0] de_branch_op;
+  wire        de_gpr_we;
+  wire [ 2:0] de_gpr_wsel;
+  wire        de_mem_valid;
+  wire        de_mem_wen;
+  wire [ 1:0] de_mem_rbhw;
+  wire [ 1:0] de_mem_wbhw;
+  wire        de_isign;
+  wire        de_csr_we;
+  wire [ 1:0] de_csr_wsel;
+  wire [11:0] de_csr_addr;
+  wire        de_imm2csr;
+  wire        de_is_ecall;
+  wire        de_is_ebreak;
+
+  // GPR/CSR read ports driven by the IDU stage.
+  wire [ 4:0] gpr_raddr1;
+  wire [ 4:0] gpr_raddr2;
+  wire [31:0] gpr_rdata1;
+  wire [31:0] gpr_rdata2;
+  wire [31:0] gpr_a0;
+  wire [11:0] csr_raddr1;
+  wire [31:0] csr_rdata1;
+  wire [31:0] csr_mtvec;
+  wire        csr_invalid_addr;
+
+  // Commit write ports driven by WBU into the register files.
+  wire        gpr_wen;
+  wire [ 4:0] gpr_waddr;
+  wire [31:0] gpr_wdata;
+  wire        csr_wen;
+  wire [11:0] csr_waddr;
+  wire [31:0] csr_wdata;
+  wire        csr_ecall;
+  wire [31:0] csr_mepc_data;
+  wire [31:0] csr_mcause_data;
+
+  // EXU -> WBU (ew = execute/write-back).
+  wire        ew_valid;
+  wire        ew_ready;
+  wire [31:0] ew_pc;
+  wire [31:0] ew_inst;
+  wire [31:0] ew_next_pc;
+  wire        ew_illegal;
+  wire        ew_rd_we;
+  wire [ 4:0] ew_rd;
+  wire [31:0] ew_rd_data;
+  wire        ew_csr_we;
+  wire [11:0] ew_csr_addr;
+  wire [31:0] ew_csr_data;
+  wire        ew_is_ecall;
+  wire        ew_is_ebreak;
+  wire [31:0] ew_a0;
+  wire        ew_skip_ref;
+  wire [ 9:0] ew_perf_class;
+
+  // WBU -> IFU next-PC message.
+  wire        pc_valid;
+  wire        pc_ready;
+  wire [31:0] pc_data;
+
+  // Architectural PC and commit observation ports.
+  wire [31:0] arch_pc;
+  wire        commit_valid;
+  wire        retire_illegal;
+  wire [31:0] retire_pc;
+  wire [31:0] retire_inst;
+  wire        retire_ebreak;
+  wire [31:0] retire_a0;
+  wire        retire_skip_ref;
+  wire [ 9:0] retire_perf_class;
+  wire        retire_pending;
+
+  // EXU <-> LSU request/response.
+  wire        req_valid;
+  wire        req_ready;
+  wire [31:0] req_addr;
+  wire        req_write;
+  wire [ 1:0] req_rsize;
+  wire [ 1:0] req_wsize;
+  wire [31:0] req_wdata;
+  wire        req_sign;
+  wire        rsp_valid;
+  wire        rsp_ready;
+  wire [31:0] rsp_rdata;
+
+  // LSU fault.
+  wire        lsu_error;
+  wire        lsu_error_write;
+  wire [31:0] lsu_error_addr;
+  wire [1:0]  lsu_error_resp;
+
+  // Read-only stage-state observations used by performance counters.
+  wire        ifu_dbg_wait_pc;
+  wire        exu_dbg_busy;
+  wire        exu_dbg_mem_wait;
+  wire        exu_dbg_wait_wb;
+
+  // ===========================================================================
+  // Host observation boundary.
+  // ===========================================================================
   assign debug_bus_error = ifu_error || lsu_error;
   assign debug_bus_error_addr = ifu_error ? ifu_error_addr : lsu_error_addr;
   assign debug_bus_error_resp = ifu_error ? ifu_error_resp : lsu_error_resp;
   assign debug_bus_error_op = ifu_error ? 2'd0 : (lsu_error_write ? 2'd2 : 2'd1);
 
-  // Completion is sampled by the host before the committing rising edge.
-  // Every architectural/DPI write is gated by the same successful commit.
-  assign diff_ifu_valid = rst_n && ifu_valid && !debug_bus_error &&
-                          (!mem_valid || lsu_done);
-  wire commit = diff_ifu_valid && !invalid_inst;
-  // Device accesses are decided by the LSU address, like NEMU's mmio skip.
-  // exu_result is stable for the whole instruction, so this is valid at commit.
-  assign debug_skip_ref = mem_valid &&
-                          ((exu_result - PMEM_BASE) >= PMEM_SIZE);
-  wire lsu_request = rst_n && ifu_valid && mem_valid && !invalid_inst &&
-                     !debug_bus_error;
+  // The host samples PC/inst before the commit edge and reads PC again after
+  // it.  arch_pc is the only architectural PC and moves exactly on commit.
+  // Illegal instructions never commit, but must still be reported to the host;
+  // otherwise the host would never take its invalid-instruction branch.
+  assign diff_ifu_valid = !debug_bus_error && (commit_valid || retire_illegal);
+  assign invalid_inst = retire_illegal;
+  assign debug_pc = arch_pc;
+  assign debug_inst = retire_inst;
+  assign debug_skip_ref = commit_valid && retire_skip_ref;
 
-  // IFU and LSU masters -> round-robin read arbiter -> external AXI.
-  // Device address decoding belongs to the platform.
+  // ===========================================================================
+  // AXI4-Lite internal master wires (IFU read-only, LSU read/write).
+  // ===========================================================================
   wire [31:0] ifu_araddr;
-  wire [2:0] ifu_arprot;
-  wire ifu_arvalid;
-  wire ifu_arready;
+  wire [2:0]  ifu_arprot;
+  wire        ifu_arvalid;
+  wire        ifu_arready;
   wire [31:0] ifu_rdata;
-  wire [1:0] ifu_rresp;
-  wire ifu_rvalid;
-  wire ifu_rready;
+  wire [1:0]  ifu_rresp;
+  wire        ifu_rvalid;
+  wire        ifu_rready;
   wire [31:0] unused_ifu_awaddr;
-  wire [2:0] unused_ifu_awprot;
-  wire unused_ifu_awvalid;
+  wire [2:0]  unused_ifu_awprot;
+  wire        unused_ifu_awvalid;
   wire [31:0] unused_ifu_wdata;
-  wire [3:0] unused_ifu_wstrb;
-  wire unused_ifu_wvalid;
-  wire unused_ifu_bready;
+  wire [3:0]  unused_ifu_wstrb;
+  wire        unused_ifu_wvalid;
+  wire        unused_ifu_bready;
+
   wire [31:0] lsu_araddr;
-  wire [2:0] lsu_arprot;
-  wire lsu_arvalid;
-  wire lsu_arready;
+  wire [2:0]  lsu_arprot;
+  wire        lsu_arvalid;
+  wire        lsu_arready;
   wire [31:0] lsu_rdata;
-  wire [1:0] lsu_rresp;
-  wire lsu_rvalid;
-  wire lsu_rready;
+  wire [1:0]  lsu_rresp;
+  wire        lsu_rvalid;
+  wire        lsu_rready;
   wire [31:0] lsu_awaddr;
-  wire [2:0] lsu_awprot;
-  wire lsu_awvalid;
-  wire lsu_awready;
+  wire [2:0]  lsu_awprot;
+  wire        lsu_awvalid;
+  wire        lsu_awready;
   wire [31:0] lsu_wdata;
-  wire [3:0] lsu_wstrb;
-  wire lsu_wvalid;
-  wire lsu_wready;
-  wire [1:0] lsu_bresp;
-  wire lsu_bvalid;
-  wire lsu_bready;
-  IFU #(
-      .RANDOM_DELAY(RANDOM_DELAY)
-  ) ifu1 (
+  wire [3:0]  lsu_wstrb;
+  wire        lsu_wvalid;
+  wire        lsu_wready;
+  wire [1:0]  lsu_bresp;
+  wire        lsu_bvalid;
+  wire        lsu_bready;
+
+  // ===========================================================================
+  // IFU: message-based fetch engine.
+  // ===========================================================================
+  IFU ifu1 (
       .clk(clk),
       .rst_n(rst_n),
-      .pc(pc),
-      .mem_valid(mem_valid),
-      .memfinish(commit),
-      .inst(ifu_inst),
-      .ifu_valid(ifu_valid),
+      .pc_valid(pc_valid),
+      .pc_ready(pc_ready),
+      .pc_data(pc_data),
+      .out_valid(fi_valid),
+      .out_ready(fi_ready),
+      .out_pc(fi_pc),
+      .out_inst(fi_inst),
+      .dbg_wait_pc(ifu_dbg_wait_pc),
       .ifu_error(ifu_error),
       .ifu_error_resp(ifu_error_resp),
       .ifu_error_addr(ifu_error_addr),
@@ -147,120 +281,90 @@ module npc_core #(
       .m_axi_bready(unused_ifu_bready)
   );
 
-  wire [4:0] rs1;
-  wire [4:0] rs2;
-  wire [4:0] rd;
-  wire [31:0] imm;
-  wire [31:0] imm_raw;
-  wire [1:0] src_sel;
-  wire [3:0] exu_op;
-  wire pc_we;
-  wire [1:0] pc_wsel;
-  wire branch_en;
-  wire [2:0] branch_op;
-  wire gpr_we;
-  wire [2:0] gpr_wsel;
-  wire is_ebreak;
-  wire is_ecall;
-  wire [31:0] mem_rdata;
-  wire mem_wen;
-  wire [1:0] mem_rbhw;
-  wire [1:0] mem_wbhw;
-  wire isign;
-  wire mem_valid;
-  wire csr_we;
-  wire [1:0]csr_wsel;
-  wire [11:0] csr_wraddr;
-  wire [31:0] csr_rdata;
-  wire imm2csr;
-
-  wire [31:0] tmp_csr = csr_rdata;
-
-  assign imm = imm2csr ? tmp_csr : imm_raw;//csr指令的立即数语义为csr寄存器的值，而不是指令中的立即数
-  wire invalid_inst_idu;
-  IDU idu1 (
-      .inst(ifu_inst),
-      .rs1(rs1),
-      .rs2(rs2),
-      .rd(rd),
-      .imm(imm_raw),
-      .invalid_inst(invalid_inst_idu),
-      .src_sel(src_sel),
-      .exu_op(exu_op),
-      .pc_we(pc_we),
-      .pc_wsel(pc_wsel),
-      .branch_en(branch_en),
-      .branch_op(branch_op),
-      .gpr_we(gpr_we),
-      .mem_we(mem_wen),
-      .mem_rbhw(mem_rbhw),
-      .mem_wbhw(mem_wbhw),
-      .isign(isign),
-      .is_ebreak(is_ebreak),
-      .mem_valid(mem_valid),
-      .gpr_wsel(gpr_wsel),
-      .csr_we(csr_we),
-      .csr_wsel(csr_wsel),
-      .csr_wraddr(csr_wraddr),
-      .imm2csr(imm2csr),
-      .is_ecall(is_ecall)
-  );
-  wire [31:0] exu_result;
-  wire exu_zero;
-  wire exu_signed_lt;
-  wire exu_unsigned_lt;
-  wire [31:0] Rrs1;
-  wire [31:0] Rrs2;
-  wire [31:0] gpr_a0;
-  EXU exu1 (
-      .rs1(Rrs1),
-      .rs2(Rrs2),
-      .imm(imm),
-      .pc(pc),
-      .src_sel(src_sel),
-      .exu_op(exu_op),
-      .result(exu_result),
-      .zero(exu_zero),
-      .signed_lt(exu_signed_lt),
-      .unsigned_lt(exu_unsigned_lt)
-  );
-  wire [31:0] gpr_wdata;
-  wire branch_taken;
-  BranchUnit branch_unit1 (
-      .branch_en(branch_en),
-      .branch_op(branch_op),
-      .zero(exu_zero),
-      .signed_lt(exu_signed_lt),
-      .unsigned_lt(exu_unsigned_lt),
-      .branch_taken(branch_taken)
-  );
-  wire pc_write_en = (pc_we || branch_taken);
-  wire invalid_csr_access;
-  WBU wbu1 (
+  // ===========================================================================
+  // IDU stage: original IDU wrapped in a one-entry message slot, plus the
+  // combinational register-file read ports.
+  // ===========================================================================
+  idu_stage idu_stage1 (
       .clk(clk),
       .rst_n(rst_n),
-      .pc_we(pc_write_en && commit),
-      .diff_ifu_valid(commit),
-      .pc_wsel(pc_wsel),
-      .exu_result(exu_result),
-      .imm(imm),
-      .gpr_we(gpr_we && commit),
-      .gpr_wsel(gpr_wsel),
-      .mem_rdata(mem_rdata),
-      .rs1(rs1),
-      .rs2(rs2),
-      .rd(rd),
-      .is_ecall(is_ecall && commit),
-      .gpr_rdata1(Rrs1),
-      .gpr_rdata2(Rrs2),
+      .in_valid(fi_valid),
+      .in_ready(fi_ready),
+      .in_pc(fi_pc),
+      .in_inst(fi_inst),
+      .out_valid(de_valid),
+      .out_ready(de_ready),
+      .out_pc(de_pc),
+      .out_inst(de_inst),
+      .out_illegal(de_illegal),
+      .out_rd(de_rd),
+      .out_rs1(de_rs1),
+      .out_rs2(de_rs2),
+      .out_rs1_value(de_rs1_value),
+      .out_rs2_value(de_rs2_value),
+      .out_imm(de_imm),
+      .out_csr_old(de_csr_old),
+      .out_mtvec(de_mtvec),
+      .out_a0(de_a0),
+      .out_src_sel(de_src_sel),
+      .out_exu_op(de_exu_op),
+      .out_pc_we(de_pc_we),
+      .out_pc_wsel(de_pc_wsel),
+      .out_branch_en(de_branch_en),
+      .out_branch_op(de_branch_op),
+      .out_gpr_we(de_gpr_we),
+      .out_gpr_wsel(de_gpr_wsel),
+      .out_mem_valid(de_mem_valid),
+      .out_mem_wen(de_mem_wen),
+      .out_mem_rbhw(de_mem_rbhw),
+      .out_mem_wbhw(de_mem_wbhw),
+      .out_isign(de_isign),
+      .out_csr_we(de_csr_we),
+      .out_csr_wsel(de_csr_wsel),
+      .out_csr_addr(de_csr_addr),
+      .out_imm2csr(de_imm2csr),
+      .out_is_ecall(de_is_ecall),
+      .out_is_ebreak(de_is_ebreak),
+      .gpr_raddr1(gpr_raddr1),
+      .gpr_raddr2(gpr_raddr2),
+      .gpr_rdata1(gpr_rdata1),
+      .gpr_rdata2(gpr_rdata2),
       .gpr_a0(gpr_a0),
-      .gpr_wdata(gpr_wdata),
-      .pc(pc),
-      .csr_we(csr_we && commit),
-      .csr_wsel(csr_wsel),
-      .csr_wraddr(csr_wraddr),
-      .csr_rdata1(csr_rdata),
-      .invalid_csr_access(invalid_csr_access),
+      .csr_raddr1(csr_raddr1),
+      .csr_rdata1(csr_rdata1),
+      .csr_mtvec(csr_mtvec),
+      .csr_invalid_addr(csr_invalid_addr)
+  );
+
+  // ===========================================================================
+  // Architecture register files (moved out of WBU).
+  // ===========================================================================
+  GPR gpr1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .wdata(gpr_wdata),
+      .waddr(gpr_waddr),
+      .wen(gpr_wen),
+      .raddr1(gpr_raddr1),
+      .raddr2(gpr_raddr2),
+      .rdata1(gpr_rdata1),
+      .rdata2(gpr_rdata2),
+      .rdata_a0(gpr_a0)
+  );
+
+  CSR csr1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .wdata(csr_wdata),
+      .waddr(csr_waddr),
+      .wen(csr_wen),
+      .raddr1(csr_raddr1),
+      .rdata1(csr_rdata1),
+      .is_ecall(csr_ecall),
+      .mepc_data(csr_mepc_data),
+      .mcause_data(csr_mcause_data),
+      .mtvec_data(csr_mtvec),
+      .invalid_csr_access(csr_invalid_addr),
       .dbg_mstatus(debug_mstatus),
       .dbg_mtvec(debug_mtvec),
       .dbg_mepc(debug_mepc),
@@ -271,6 +375,130 @@ module npc_core #(
       .dbg_marchid(debug_marchid)
   );
 
+  // ===========================================================================
+  // EXU stage: snapshot, ALU/branch, optional LSU request, result selection.
+  // ===========================================================================
+  exu_stage #(
+      .PMEM_BASE(PMEM_BASE),
+      .PMEM_SIZE(PMEM_SIZE)
+  ) exu_stage1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .in_valid(de_valid),
+      .in_ready(de_ready),
+      .in_pc(de_pc),
+      .in_inst(de_inst),
+      .in_illegal(de_illegal),
+      .in_rd(de_rd),
+      .in_rs1_value(de_rs1_value),
+      .in_rs2_value(de_rs2_value),
+      .in_imm(de_imm),
+      .in_csr_old(de_csr_old),
+      .in_mtvec(de_mtvec),
+      .in_a0(de_a0),
+      .in_src_sel(de_src_sel),
+      .in_exu_op(de_exu_op),
+      .in_pc_we(de_pc_we),
+      .in_pc_wsel(de_pc_wsel),
+      .in_branch_en(de_branch_en),
+      .in_branch_op(de_branch_op),
+      .in_gpr_we(de_gpr_we),
+      .in_gpr_wsel(de_gpr_wsel),
+      .in_mem_valid(de_mem_valid),
+      .in_mem_wen(de_mem_wen),
+      .in_mem_rbhw(de_mem_rbhw),
+      .in_mem_wbhw(de_mem_wbhw),
+      .in_isign(de_isign),
+      .in_csr_we(de_csr_we),
+      .in_csr_wsel(de_csr_wsel),
+      .in_csr_addr(de_csr_addr),
+      .in_imm2csr(de_imm2csr),
+      .in_is_ecall(de_is_ecall),
+      .in_is_ebreak(de_is_ebreak),
+      .out_valid(ew_valid),
+      .out_ready(ew_ready),
+      .out_pc(ew_pc),
+      .out_inst(ew_inst),
+      .out_next_pc(ew_next_pc),
+      .out_illegal(ew_illegal),
+      .out_rd_we(ew_rd_we),
+      .out_rd(ew_rd),
+      .out_rd_data(ew_rd_data),
+      .out_csr_we(ew_csr_we),
+      .out_csr_addr(ew_csr_addr),
+      .out_csr_data(ew_csr_data),
+      .out_is_ecall(ew_is_ecall),
+      .out_is_ebreak(ew_is_ebreak),
+      .out_a0(ew_a0),
+      .out_skip_ref(ew_skip_ref),
+      .out_perf_class(ew_perf_class),
+      .dbg_busy(exu_dbg_busy),
+      .dbg_mem_wait(exu_dbg_mem_wait),
+      .dbg_wait_wb(exu_dbg_wait_wb),
+      .req_valid(req_valid),
+      .req_ready(req_ready),
+      .req_addr(req_addr),
+      .req_write(req_write),
+      .req_rsize(req_rsize),
+      .req_wsize(req_wsize),
+      .req_wdata(req_wdata),
+      .req_sign(req_sign),
+      .rsp_valid(rsp_valid),
+      .rsp_ready(rsp_ready),
+      .rsp_rdata(rsp_rdata)
+  );
+
+  // ===========================================================================
+  // WBU: commit stage.  Consumes the ew message, issues the next-PC message
+  // and drives the architectural write ports exactly once per instruction.
+  // ===========================================================================
+  WBU wbu1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .in_valid(ew_valid),
+      .in_ready(ew_ready),
+      .in_pc(ew_pc),
+      .in_inst(ew_inst),
+      .in_next_pc(ew_next_pc),
+      .in_illegal(ew_illegal),
+      .in_rd_we(ew_rd_we),
+      .in_rd(ew_rd),
+      .in_rd_data(ew_rd_data),
+      .in_csr_we(ew_csr_we),
+      .in_csr_addr(ew_csr_addr),
+      .in_csr_data(ew_csr_data),
+      .in_is_ecall(ew_is_ecall),
+      .in_is_ebreak(ew_is_ebreak),
+      .in_a0(ew_a0),
+      .in_skip_ref(ew_skip_ref),
+      .in_perf_class(ew_perf_class),
+      .pc_valid(pc_valid),
+      .pc_ready(pc_ready),
+      .pc_data(pc_data),
+      .gpr_wen(gpr_wen),
+      .gpr_waddr(gpr_waddr),
+      .gpr_wdata(gpr_wdata),
+      .csr_wen(csr_wen),
+      .csr_waddr(csr_waddr),
+      .csr_wdata(csr_wdata),
+      .csr_ecall(csr_ecall),
+      .csr_mepc_data(csr_mepc_data),
+      .csr_mcause_data(csr_mcause_data),
+      .arch_pc(arch_pc),
+      .commit_valid(commit_valid),
+      .retire_illegal(retire_illegal),
+      .retire_pc(retire_pc),
+      .retire_inst(retire_inst),
+      .retire_ebreak(retire_ebreak),
+      .retire_a0(retire_a0),
+      .retire_skip_ref(retire_skip_ref),
+      .retire_perf_class(retire_perf_class),
+      .retire_pending(retire_pending)
+  );
+
+  // ===========================================================================
+  // LSU.
+  // ===========================================================================
   LSU #(
       .RANDOM_DELAY(RANDOM_DELAY),
       .PMEM_BASE(PMEM_BASE),
@@ -278,16 +506,17 @@ module npc_core #(
   ) lsu1 (
       .clk(clk),
       .rst_n(rst_n),
-      .mem_rbhw(mem_rbhw),
-      .mem_addr(exu_result),
-      .mem_valid(lsu_request),
-      .wen(mem_wen),
-      .mem_wbhw(mem_wbhw),
-      .mem_wdata_raw(Rrs2),
-      .isign(isign),
-      .lsu_finish(commit),
-      .mem_rdata_r(mem_rdata),
-      .lsu_done(lsu_done),
+      .req_rsize(req_rsize),
+      .req_addr(req_addr),
+      .req_valid(req_valid),
+      .req_ready(req_ready),
+      .req_write(req_write),
+      .req_wsize(req_wsize),
+      .req_wdata(req_wdata),
+      .req_sign(req_sign),
+      .rsp_ready(rsp_ready),
+      .rsp_rdata(rsp_rdata),
+      .rsp_valid(rsp_valid),
       .lsu_error(lsu_error),
       .lsu_error_resp(lsu_error_resp),
       .lsu_error_addr(lsu_error_addr),
@@ -312,6 +541,10 @@ module npc_core #(
       .m_axi_bvalid(lsu_bvalid),
       .m_axi_bready(lsu_bready)
   );
+
+  // ===========================================================================
+  // Read arbiter: IFU and LSU share the external read channel.
+  // ===========================================================================
   AXIArbiter axi_arbiter1 (
       .clk(clk),
       .rst_n(rst_n),
@@ -362,99 +595,147 @@ module npc_core #(
       .m_axi_bvalid(m_axi_bvalid),
       .m_axi_bready(m_axi_bready)
   );
-  assign invalid_inst = invalid_inst_idu || invalid_csr_access;
 
 `ifdef SYNTHESIS
-  wire unused_dpi_debug = &{1'b0, is_ebreak, gpr_a0, gpr_wdata};
+  wire unused_synth = &{1'b0, de_rs1, de_rs2, ew_perf_class, retire_perf_class,
+                        retire_pc, retire_a0, retire_ebreak, retire_pending,
+                        ifu_dbg_wait_pc, exu_dbg_busy, exu_dbg_mem_wait,
+                        exu_dbg_wait_wb};
 `endif
 `ifndef SYNTHESIS
+  // rs1/rs2 indexes travel with the decode message for tracing; the operands
+  // themselves are already latched as de_rs1_value/de_rs2_value.
+  wire unused_nc = &{1'b0, de_rs1, de_rs2, retire_perf_class, retire_pending,
+                     ifu_dbg_wait_pc, exu_dbg_busy, exu_dbg_mem_wait,
+                     exu_dbg_wait_wb};
+
+  // Message-stability checkers: observation only, never functional control.
+  // Payloads follow the channel field order of the guide (de = 304 bits,
+  // ew = 225 bits); control fields are included on purpose.
+  wire [ 63:0] fi_msg = {fi_pc, fi_inst};
+  wire [303:0] de_msg = {de_pc, de_inst, de_illegal, de_rd,
+                         de_rs1_value, de_rs2_value, de_imm, de_csr_old,
+                         de_mtvec, de_a0, de_src_sel, de_exu_op,
+                         de_pc_we, de_pc_wsel, de_branch_en, de_branch_op,
+                         de_gpr_we, de_gpr_wsel, de_mem_valid, de_mem_wen,
+                         de_mem_rbhw, de_mem_wbhw, de_isign,
+                         de_csr_we, de_csr_wsel, de_csr_addr,
+                         de_imm2csr, de_is_ecall, de_is_ebreak};
+  wire [224:0] ew_msg = {ew_pc, ew_inst, ew_next_pc, ew_illegal,
+                         ew_rd_we, ew_rd, ew_rd_data,
+                         ew_csr_we, ew_csr_addr, ew_csr_data,
+                         ew_is_ecall, ew_is_ebreak, ew_a0,
+                         ew_skip_ref, ew_perf_class};
+
+  rv_stability_check #(.W(64)) fi_stability (
+      .clk(clk),
+      .rst_n(rst_n),
+      .valid(fi_valid),
+      .ready(fi_ready),
+      .payload(fi_msg)
+  );
+  rv_stability_check #(.W(304)) de_stability (
+      .clk(clk),
+      .rst_n(rst_n),
+      .valid(de_valid),
+      .ready(de_ready),
+      .payload(de_msg)
+  );
+  rv_stability_check #(.W(225)) ew_stability (
+      .clk(clk),
+      .rst_n(rst_n),
+      .valid(ew_valid),
+      .ready(ew_ready),
+      .payload(ew_msg)
+  );
+
   always @(posedge clk) begin
-    if (commit && gpr_we) npc_reg_write({27'b0, rd}, gpr_wdata);
-    if (commit && is_ebreak) npc_ebreak(gpr_a0, pc);
+    if (gpr_wen) npc_reg_write({27'b0, gpr_waddr}, gpr_wdata);
+    if (commit_valid && retire_ebreak) npc_ebreak(retire_a0, retire_pc);
   end
 
 `ifdef CONFIG_PERF_COUNTERS
   // Simulation-only performance events, sampled once per active rising edge.
-  // Completion events count operations; level events count occupied cycles.
-  // The host accumulates the mask through DPI-C and prints it in statistic().
-  // Bits 5-7 stay clear here: bus faults and invalid decodes abort the host
-  // before another clock edge, so the host counts them at detection time.
-  localparam [2:0] PERF_GPR_EXU_RESULT = 3'd0;
-  localparam [2:0] PERF_GPR_IMMEDIATE  = 3'd2;
-  localparam [2:0] PERF_GPR_PC_IMM     = 3'd3;
-  localparam [1:0] PERF_PC_DIRECT      = 2'd0;
-  localparam [1:0] PERF_PC_TO_MEPC     = 2'd3;
-  localparam [1:0] PERF_CSR_EXU_RESULT = 2'd0;
-
-  wire perf_ifu_ar    = ifu_arvalid && ifu_arready;
-  wire perf_ifu_fetch = ifu_rvalid && ifu_rready && (ifu_rresp == 2'b00);
-  // Cycle-level: no fetched instruction is available (fetch latency/stall).
-  wire perf_ifu_idle  = rst_n && !ifu_valid;
-
-  // Partition the fetch phase without reaching into the IFU's private FSM.
-  // PREP includes the mandatory request-launch cycle even with RANDOM_DELAY=0.
-  // AR acceptance and successful R reception use the existing event bits.
-  wire perf_ifu_prep = !ifu_valid && !ifu_arvalid && !ifu_rready && !ifu_error;
-  wire perf_ifu_ar_wait = ifu_arvalid && !ifu_arready;
-  wire perf_ifu_r_wait = ifu_rready && !ifu_rvalid;
+  // Instruction classification travels with the committed message, so it is
+  // no longer recomputed from live decode outputs.
+  wire perf_ifu_ar      = ifu_arvalid && ifu_arready;
+  wire perf_ifu_fetch   = ifu_rvalid && ifu_rready && (ifu_rresp == 2'b00);
   wire perf_ifu_r_error = ifu_rready && ifu_rvalid && (ifu_rresp != 2'b00);
-  wire perf_execute_cycle = ifu_valid;
-  wire perf_ifu_hold_lsu = ifu_valid && mem_valid;
-  // CPU request-valid until result-ready: include the acceptance cycle,
-  // exclude the DONE cycle. This is the CPU-visible waiting time.
-  // Counts the complete CPU access, including both beats of a split access.
-  wire perf_lsu_wait = lsu_request && !lsu_done;
+  wire perf_ifu_deliver = fi_valid && fi_ready;
 
-  wire perf_lsu_load  = lsu_done && !lsu_error_write;
-  wire perf_lsu_store = lsu_done && lsu_error_write;
+  // Frontend: the IFU is in exactly one state each cycle, so these levels
+  // plus perf_ifu_deliver partition all active cycles.
+  wire perf_ifu_wait_pc = ifu_dbg_wait_pc;
+  wire perf_ifu_ar_wait = ifu_arvalid && !ifu_arready;
+  wire perf_ifu_r_wait  = ifu_rready && !ifu_rvalid;
+  wire perf_id_hold     = fi_valid && !fi_ready;
+  wire perf_ifu_fault   = ifu_error;
 
-  wire perf_alu    = commit && gpr_we && (gpr_wsel == PERF_GPR_EXU_RESULT);
-  wire perf_load   = commit && mem_valid && !mem_wen;
-  wire perf_store  = commit && mem_valid && mem_wen;
-  wire perf_branch = commit && branch_en;
-  wire perf_jump   = commit && pc_we && (pc_wsel == PERF_PC_DIRECT);
-  wire perf_csr    = commit && csr_we;
-  wire perf_system = commit && (is_ecall || is_ebreak ||
-                                (pc_we && (pc_wsel == PERF_PC_TO_MEPC)));
-  wire perf_lui    = commit && gpr_we &&
-                     (gpr_wsel == PERF_GPR_IMMEDIATE) && !csr_we;
-  wire perf_auipc  = commit && gpr_we && (gpr_wsel == PERF_GPR_PC_IMM);
-  // Instructions that actually consume an EXU result: ALU, address
-  // generation, comparison, pc+imm, and the csrrs read-modify-write.
-  wire perf_exu    = perf_alu || perf_load || perf_store || perf_branch ||
-                     perf_jump || perf_auipc ||
-                     (commit && csr_we && (csr_wsel == PERF_CSR_EXU_RESULT));
+  // Backend: an instruction lives in IDU, EXU or WBU.
+  wire perf_execute_cycle = de_valid || exu_dbg_busy || retire_pending;
+  wire perf_backend_idle  = !perf_execute_cycle;
+
+  // Explicit wait states replacing the old prepare/execute/lsu_hold
+  // meanings of the previous architecture.
+  wire perf_lsu_wait    = exu_dbg_mem_wait;
+  wire perf_wb_wait_pc  = pc_valid && !pc_ready;
+  wire perf_exu_wait_wb = exu_dbg_wait_wb;
+
+  // The request direction must survive until the response retires.
+  reg perf_req_write_q;
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) perf_req_write_q <= 1'b0;
+    else if (req_valid && req_ready) perf_req_write_q <= req_write;
+  end
+
+  wire perf_lsu_rsp   = rsp_valid && rsp_ready;
+  wire perf_lsu_load  = perf_lsu_rsp && !perf_req_write_q;
+  wire perf_lsu_store = perf_lsu_rsp && perf_req_write_q;
+
+  wire perf_alu    = commit_valid && retire_perf_class[0];
+  wire perf_load   = commit_valid && retire_perf_class[1];
+  wire perf_store  = commit_valid && retire_perf_class[2];
+  wire perf_branch = commit_valid && retire_perf_class[3];
+  wire perf_jump   = commit_valid && retire_perf_class[4];
+  wire perf_csr    = commit_valid && retire_perf_class[5];
+  wire perf_system = commit_valid && retire_perf_class[6];
+  wire perf_lui    = commit_valid && retire_perf_class[7];
+  wire perf_auipc  = commit_valid && retire_perf_class[8];
+  wire perf_exu    = commit_valid && retire_perf_class[9];
 
   wire [31:0] perf_events = {
-      4'b0,
-      perf_ifu_hold_lsu, // 27: executing a memory instruction (including DONE)
-      perf_ifu_r_error,  // 26: consumed an unsuccessful fetch response
-      ifu_error,        // 25: sticky fetch-fault hold
-      perf_lsu_wait,    // 24: CPU-visible memory latency
-      perf_execute_cycle, // 23: fetched instruction occupies the backend
-      perf_ifu_r_wait,  // 22: expecting R but no response is valid
-      perf_ifu_ar_wait, // 21: offering AR but address not accepted
-      perf_ifu_prep,    // 20: request preparation / artificial launch delay
-      1'b1,            // 19: every non-reset cycle
-      perf_exu,        // 18
-      perf_auipc,      // 17
-      perf_lui,        // 16
-      perf_system,     // 15
-      perf_csr,        // 14
-      perf_jump,       // 13
-      perf_branch,     // 12
-      perf_store,      // 11
-      perf_load,       // 10
-      perf_alu,        // 9
-      commit,          // 8
-      1'b0,            // 7 invalid instruction (host)
-      1'b0,            // 6 fetch bus fault (host)
-      1'b0,            // 5 data bus fault (host)
-      perf_lsu_store,  // 4
-      perf_lsu_load,   // 3
-      perf_ifu_idle,   // 2
-      perf_ifu_fetch,  // 1
-      perf_ifu_ar      // 0
+      1'b0,               // 31 reserved
+      perf_ifu_deliver,   // 30: IFU message accepted by IDU
+      perf_exu_wait_wb,   // 29: result ready, WBU not accepting
+      perf_id_hold,       // 28: IFU offering, IDU/EXU not accepting
+      perf_wb_wait_pc,    // 27: WBU full, IFU cannot take the next PC
+      perf_ifu_r_error,   // 26: consumed an unsuccessful fetch response
+      perf_ifu_fault,     // 25: sticky fetch-fault hold
+      perf_lsu_wait,      // 24: EXU waiting for LSU accept/response
+      perf_execute_cycle, // 23: backend occupied
+      perf_ifu_r_wait,    // 22: expecting R but no response is valid
+      perf_ifu_ar_wait,   // 21: offering AR but address not accepted
+      perf_ifu_wait_pc,   // 20: waiting for the next-PC message
+      1'b1,               // 19: every non-reset cycle
+      perf_exu,           // 18
+      perf_auipc,         // 17
+      perf_lui,           // 16
+      perf_system,        // 15
+      perf_csr,           // 14
+      perf_jump,          // 13
+      perf_branch,        // 12
+      perf_store,         // 11
+      perf_load,          // 10
+      perf_alu,           // 9
+      commit_valid,       // 8
+      1'b0,               // 7 invalid instruction (host)
+      1'b0,               // 6 fetch bus fault (host)
+      1'b0,               // 5 data bus fault (host)
+      perf_lsu_store,     // 4
+      perf_lsu_load,      // 3
+      perf_backend_idle,  // 2
+      perf_ifu_fetch,     // 1
+      perf_ifu_ar         // 0
   };
 
   always @(posedge clk) begin

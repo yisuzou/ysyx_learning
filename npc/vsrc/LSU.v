@@ -8,16 +8,17 @@ module LSU #(
 ) (
     input         clk,
     input         rst_n,
-    input  [1:0]  mem_rbhw,
-    input  [31:0] mem_addr,
-    input         mem_valid,
-    input         wen,
-    input  [1:0]  mem_wbhw,
-    input  [31:0] mem_wdata_raw,
-    input         isign,
-    input         lsu_finish,
-    output reg [31:0] mem_rdata_r,
-    output        lsu_done,
+    input  [1:0]  req_rsize,
+    input  [31:0] req_addr,
+    input         req_valid,
+    output        req_ready,
+    input         req_write,
+    input  [1:0]  req_wsize,
+    input  [31:0] req_wdata,
+    input         req_sign,
+    input         rsp_ready,
+    output reg [31:0] rsp_rdata,
+    output        rsp_valid,
     output reg        lsu_error,
     output reg [1:0]  lsu_error_resp,
     output reg [31:0] lsu_error_addr,
@@ -61,7 +62,7 @@ module LSU #(
   localparam [3:0] FAULT   = 4'd8;
 
   // State    Action                            Transition
-  // IDLE     Latch a valid CPU request          mem_valid -> CHECK
+  // IDLE     Latch a valid CPU request          req_fire -> CHECK
   // CHECK    Validate width/cross-word span     valid -> DELAY; error -> FAULT
   // DELAY    Delay launch, not an active VALID  delay_done -> RD_ADDR/WR_SEND
   // RD_ADDR  Hold ARVALID/ARADDR                ar_fire -> RD_DATA
@@ -70,7 +71,7 @@ module LSU #(
   // WR_SEND  Independent AW/W handshakes        both accepted -> WR_RESP
   // WR_RESP  Receive write acknowledgement      error -> FAULT; final -> DONE
   //                                            first of two -> DELAY
-  // DONE     Hold result and completion        lsu_finish -> IDLE
+  // DONE     Hold result and completion        rsp_fire -> IDLE
   // FAULT    Hold fault, no further requests    reset only
   // All other conditions hold state; reset discards requests/responses.
   reg [3:0] state, next_state;
@@ -138,8 +139,8 @@ module LSU #(
                          (split_access && !in_ram_span(req_addr_r, bytes));
   wire [1:0] check_resp = (split_access && original_in_ram) ?
                           RESP_DECERR : RESP_SLVERR;
-  wire [1:0] incoming_size = wen ? mem_wbhw : mem_rbhw;
-  wire [4:0] incoming_shift = {mem_addr[1:0], 3'b000};
+  wire [1:0] incoming_size = req_write ? req_wsize : req_rsize;
+  wire [4:0] incoming_shift = {req_addr[1:0], 3'b000};
   wire [4:0] read_shift = {req_addr_r[1:0], 3'b000};
   wire [63:0] read_words = second_r ? {m_axi_rdata, first_read_r} :
                                     {32'b0, m_axi_rdata};
@@ -168,9 +169,12 @@ module LSU #(
   assign m_axi_wstrb = second_r ? write_strb_r[7:4] : write_strb_r[3:0];
   assign m_axi_wvalid = rst_n && (state == WR_SEND) && !w_sent;
   assign m_axi_bready = rst_n && (state == WR_RESP);
-  assign lsu_done = rst_n && (state == DONE);
+  assign req_ready = rst_n && (state == IDLE);
+  assign rsp_valid = rst_n && (state == DONE);
   assign lsu_error_write = write_r;
 
+  wire req_fire = req_valid && req_ready;
+  wire rsp_fire = rsp_valid && rsp_ready;
   wire ar_fire = m_axi_arvalid && m_axi_arready;
   wire r_fire = m_axi_rvalid && m_axi_rready;
   wire aw_fire = m_axi_awvalid && m_axi_awready;
@@ -190,7 +194,7 @@ module LSU #(
   always @(*) begin
     next_state = state;
     case (state)
-      IDLE: if (mem_valid) next_state = CHECK;
+      IDLE: if (req_fire) next_state = CHECK;
       CHECK: next_state = invalid_request ? FAULT : DELAY;
       DELAY: if (delay_done) next_state = write_r ? WR_SEND : RD_ADDR;
       RD_ADDR: if (ar_fire) next_state = RD_DATA;
@@ -209,7 +213,7 @@ module LSU #(
           else next_state = next_beat ? DELAY : DONE;
         end
       end
-      DONE: if (lsu_finish) next_state = IDLE;
+      DONE: if (rsp_fire) next_state = IDLE;
       FAULT: begin end
       default: next_state = IDLE;
     endcase
@@ -230,24 +234,24 @@ module LSU #(
       first_read_r <= 32'b0;
       aw_sent <= 1'b0;
       w_sent <= 1'b0;
-      mem_rdata_r <= 32'b0;
+      rsp_rdata <= 32'b0;
       lsu_error <= 1'b0;
       lsu_error_resp <= RESP_OKAY;
       lsu_error_addr <= 32'b0;
     end else begin
-      if ((state == IDLE) && mem_valid) begin
-        req_addr_r <= mem_addr;
-        word_addr_r <= {mem_addr[31:2], 2'b00};
+      if (req_fire) begin
+        req_addr_r <= req_addr;
+        word_addr_r <= {req_addr[31:2], 2'b00};
         size_r <= incoming_size;
-        sign_r <= isign;
-        write_r <= wen;
+        sign_r <= req_sign;
+        write_r <= req_write;
         second_r <= 1'b0;
-        write_data_r <= {32'b0, mem_wdata_raw} << incoming_shift;
-        write_strb_r <= access_mask(incoming_size) << mem_addr[1:0];
+        write_data_r <= {32'b0, req_wdata} << incoming_shift;
+        write_strb_r <= access_mask(incoming_size) << req_addr[1:0];
         first_read_r <= 32'b0;
         aw_sent <= 1'b0;
         w_sent <= 1'b0;
-        mem_rdata_r <= 32'b0;
+        rsp_rdata <= 32'b0;
       end
       if (aw_fire) aw_sent <= 1'b1;
       if (w_fire) w_sent <= 1'b1;
@@ -259,7 +263,7 @@ module LSU #(
       end
       if (r_fire && (m_axi_rresp == RESP_OKAY)) begin
         if (next_beat) first_read_r <= m_axi_rdata;
-        else mem_rdata_r <= extend_load(shifted_read[31:0], size_r, sign_r);
+        else rsp_rdata <= extend_load(shifted_read[31:0], size_r, sign_r);
       end
       if ((state == CHECK) && invalid_request) begin
         lsu_error <= 1'b1;
