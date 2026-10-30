@@ -58,9 +58,11 @@ def require(condition, message):
 def check_trace(path, output):
     """Verify each cycle's partition, completed attribution and final totals."""
     categories = ("alu", "load", "store", "branch", "jump", "csr", "system", "lui", "auipc")
-    events = ("ar_accept", "fetched", "idle", "lsu_load", "lsu_store", "lsu_fault",
-              "ifu_fault", "invalid", "commit", *categories, "exu_used", "prepare",
-              "ar_wait", "r_wait", "execute", "lsu_wait", "fault_hold", "r_error", "lsu_hold")
+    events = ("ar_accept", "fetched", "backend_idle", "lsu_load", "lsu_store",
+              "lsu_fault", "ifu_fault", "invalid", "commit", *categories,
+              "exu_used", "wait_pc", "ar_wait", "r_wait", "execute", "lsu_wait",
+              "fault_hold", "r_error", "wb_wait_pc", "id_hold", "exu_wait_wb",
+              "deliver")
     previous = None
     with path.open(newline="") as source:
         reader = csv.DictReader(source)
@@ -80,10 +82,13 @@ def check_trace(path, output):
                             f"{name}: total cycles must join its category only at commit")
                     require(row[f"{name}_exec_cycles"] - previous[f"{name}_exec_cycles"] == expected_exec,
                             f"{name}: execution cycles must join its category only at commit")
-            fetch_phase = sum(row[key] for key in (
-                "prepare", "ar_wait", "ar_accept", "r_wait", "fetched", "r_error", "fault_hold"))
-            require(fetch_phase == row["idle"], "trace fetch-phase partition")
-            require(row["idle"] + row["execute"] == cycle, "trace active-cycle partition")
+            frontend = sum(row[key] for key in (
+                "wait_pc", "id_hold", "ar_wait", "ar_accept", "r_wait", "fetched",
+                "r_error", "fault_hold"))
+            require(frontend + row["deliver"] == row["cycle"],
+                    "trace frontend partition")
+            require(row["backend_idle"] + row["execute"] == row["cycle"],
+                    "trace backend partition")
             require(sum(row[name] for name in categories) == row["commit"], "trace instruction mix")
             require(sum(row[f"{name}_total_cycles"] for name in categories) + row["pending"] == cycle,
                     "trace total attribution, including unfinished instructions")
@@ -91,8 +96,6 @@ def check_trace(path, output):
                     "trace execution attribution")
             require(row["lsu_load_cycles"] + row["lsu_store_cycles"] + row["pending_lsu"] == row["lsu_wait"],
                     "trace LSU latency attribution")
-            require(row["lsu_wait"] + row["lsu_load"] + row["lsu_store"] == row["lsu_hold"],
-                    "trace LSU DONE boundary")
             previous = row
     require(previous is not None, "empty performance trace")
     last = previous
@@ -106,8 +109,8 @@ def check_trace(path, output):
         match = re.search(rf"PERF: lsu {name} count=(\d+) latency_cycles=(\d+)", output)
         require(match and [last[f"lsu_{name}"], last[f"lsu_{name}_cycles"]] == list(map(int, match.groups())),
                 f"{name}: final LSU trace/report mismatch")
-    match = re.search(r"PERF: fetch   ar=(\d+) fetched=(\d+) fault=(\d+) idle_cycles=(\d+)", output)
-    require(match and [last[key] for key in ("ar_accept", "fetched", "ifu_fault", "idle")] == list(map(int, match.groups())),
+    match = re.search(r"PERF: fetch   ar=(\d+) fetched=(\d+) fault=(\d+) backend_idle=(\d+)", output)
+    require(match and [last[key] for key in ("ar_accept", "fetched", "ifu_fault", "backend_idle")] == list(map(int, match.groups())),
             "final IFU trace/report mismatch")
     match = re.search(r"PERF: memory  lsu_load=(\d+) lsu_store=(\d+) fault=(\d+)", output)
     require(match and [last[key] for key in ("lsu_load", "lsu_store", "lsu_fault")] == list(map(int, match.groups())),
@@ -162,20 +165,25 @@ def run_case(args, name, *, split=0, fault=0):
         require(actual == count, f"{name}: {category} count {actual} != {count}")
         require(total > execute >= count, f"{name}: invalid {category} interval")
         if category not in ("load", "store"):
-            require(execute == count, f"{name}: non-memory execution must take one cycle")
+            # de handoff + EXEC + SEND_WB + commit = four backend cycles.
+            require(execute == 4 * count, f"{name}: non-memory execution must take four cycles")
         else:
+            # The same four handoff cycles plus EXU wait for the LSU response.
             latency = re.search(rf"PERF: lsu {category} count=(\d+) latency_cycles=(\d+)", output)
-            require(latency and int(latency[1]) == count and int(latency[2]) == execute - count,
-                    f"{name}: {category} latency must exclude the final DONE cycle")
+            require(latency and int(latency[1]) == count,
+                    f"{name}: {category} latency count mismatch")
+            require(execute == 4 * count + int(latency[2]),
+                    f"{name}: {category} execution must be handoff plus LSU wait")
     if args.expect_no_delay:
         fetch_intervals = {(total - execute) / count for count, total, execute in classes.values()}
-        # Preparation (1), immediate AR (1), response delay/receive (2).
+        # WAIT_PC (1), AR accept (1), response (2).
         require(fetch_intervals == {4}, f"{name}: no-delay RAM fetch must take four cycles")
-        # Aligned load/store occupy 7/8 execution cycles. A second beat adds
-        # four read cycles or five write cycles, without repeating IDLE/CHECK.
-        require(classes["load"][2] == 7 + 11 * split,
+        # Aligned load/store occupy 11/12 execution cycles (four handoff cycles
+        # plus 7/8 LSU wait cycles). The split access adds one extra beat:
+        # four read cycles or five write cycles on top of its aligned wait.
+        require(classes["load"][2] == 11 + 15 * split,
                 f"{name}: unexpected load execution cycles")
-        require(classes["store"][2] == 8 + 13 * split,
+        require(classes["store"][2] == 12 + 17 * split,
                 f"{name}: unexpected store execution cycles")
     print(f"PASS: {name}: exact instruction mix, execution/latency accounting, all consistency checks")
     return classes

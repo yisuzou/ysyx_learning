@@ -41,7 +41,7 @@ class PerfRunTests(unittest.TestCase):
             if args.perf_trace:
                 with Path(args.perf_trace).open('w', newline='') as output:
                     writer = csv.writer(output)
-                    writer.writerow(['cycle', 'commit', 'fetched', 'prepare', 'ar_wait', 'r_wait', 'lsu_wait'])
+                    writer.writerow(['cycle', 'commit', 'fetched', 'wait_pc', 'ar_wait', 'r_wait', 'lsu_wait'])
                     writer.writerows([[cycle, cycle, cycle, 0, 0, 0, 0] for cycle in range(5)])
                     if args.bad_csv:
                         output.write('7,7,7,0,0,0,0\\n')

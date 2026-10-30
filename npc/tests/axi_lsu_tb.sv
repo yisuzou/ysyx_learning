@@ -2,11 +2,12 @@
 module axi_lsu_tb #(parameter RANDOM_DELAY = 1);
   localparam [31:0] BASE = 32'h80000000;
   reg clk = 0, rst_n = 0;
-  reg [1:0] mem_rbhw = 0, mem_wbhw = 0;
-  reg [31:0] mem_addr = BASE, mem_wdata_raw = 0;
-  reg mem_valid = 0, wen = 0, isign = 0, lsu_finish = 0;
-  wire [31:0] mem_rdata_r, lsu_error_addr;
-  wire lsu_done, lsu_error, lsu_error_write;
+  reg [1:0] req_rsize = 0, req_wsize = 0;
+  reg [31:0] req_addr = BASE, req_wdata = 0;
+  reg req_valid = 0, req_write = 0, req_sign = 0, rsp_ready = 0;
+  wire req_ready;
+  wire [31:0] rsp_rdata, lsu_error_addr;
+  wire rsp_valid, lsu_error, lsu_error_write;
   wire [1:0] lsu_error_resp;
   wire [31:0] araddr, awaddr, wdata;
   wire [2:0] arprot, awprot;
@@ -33,10 +34,11 @@ module axi_lsu_tb #(parameter RANDOM_DELAY = 1);
   integer lane, index;
 
   LSU #(.RANDOM_DELAY(RANDOM_DELAY), .PMEM_BASE(BASE), .PMEM_SIZE(32'd1024)) dut (
-      .clk(clk), .rst_n(rst_n), .mem_rbhw(mem_rbhw), .mem_addr(mem_addr),
-      .mem_valid(mem_valid), .wen(wen), .mem_wbhw(mem_wbhw),
-      .mem_wdata_raw(mem_wdata_raw), .isign(isign), .lsu_finish(lsu_finish),
-      .mem_rdata_r(mem_rdata_r), .lsu_done(lsu_done), .lsu_error(lsu_error),
+      .clk(clk), .rst_n(rst_n), .req_rsize(req_rsize), .req_addr(req_addr),
+      .req_valid(req_valid), .req_ready(req_ready), .req_write(req_write),
+      .req_wsize(req_wsize), .req_wdata(req_wdata), .req_sign(req_sign),
+      .rsp_ready(rsp_ready), .rsp_rdata(rsp_rdata), .rsp_valid(rsp_valid),
+      .lsu_error(lsu_error),
       .lsu_error_resp(lsu_error_resp), .lsu_error_addr(lsu_error_addr),
       .lsu_error_write(lsu_error_write),
       .m_axi_araddr(araddr), .m_axi_arprot(arprot), .m_axi_arvalid(arvalid),
@@ -154,15 +156,16 @@ module axi_lsu_tb #(parameter RANDOM_DELAY = 1);
   task reset;
     begin
       rst_n = 0;
-      mem_valid = 0;
-      lsu_finish = 0;
+      req_valid = 0;
+      rsp_ready = 0;
       allow_w = 1;
       allow_r_response = 1;
       error_addr = 32'hffffffff;
       read_error_resp = 0;
       write_error_resp = 0;
       tick;
-      if (arvalid || awvalid || wvalid || rready || bready || lsu_done || lsu_error)
+      if (arvalid || awvalid || wvalid || rready || bready || rsp_valid ||
+          lsu_error || req_ready)
         $fatal(1, "reset did not clear active transaction/fault");
       rst_n = 1;
       #1;
@@ -171,64 +174,66 @@ module axi_lsu_tb #(parameter RANDOM_DELAY = 1);
   task launch(input bit write_access, input [31:0] addr, input [1:0] size,
               input [31:0] data, input bit signed_access);
     begin
-      mem_valid = 1;
-      mem_addr = addr;
-      mem_rbhw = size;
-      mem_wbhw = size;
-      mem_wdata_raw = data;
-      wen = write_access;
-      isign = signed_access;
-      tick;
+      req_valid = 1;
+      req_addr = addr;
+      req_rsize = size;
+      req_wsize = size;
+      req_wdata = data;
+      req_write = write_access;
+      req_sign = signed_access;
+      while (!req_ready) tick;
+      tick;  // req_fire: the request is accepted on this edge.
+      req_valid = 0;
       // Changing live CPU inputs after acceptance must not alter the request.
-      mem_addr = 32'hdeadbeef;
-      mem_rbhw = 0;
-      mem_wbhw = 0;
-      mem_wdata_raw = ~data;
-      wen = !write_access;
-      isign = !signed_access;
+      req_addr = 32'hdeadbeef;
+      req_rsize = 0;
+      req_wsize = 0;
+      req_wdata = ~data;
+      req_write = !write_access;
+      req_sign = !signed_access;
     end
   endtask
   task wait_result;
     integer n;
     begin
-      for (n = 0; !lsu_done && !lsu_error && n < 300; n = n + 1) tick;
-      if (!lsu_done && !lsu_error) $fatal(1, "LSU transaction timeout");
+      for (n = 0; !rsp_valid && !lsu_error && n < 300; n = n + 1) tick;
+      if (!rsp_valid && !lsu_error) $fatal(1, "LSU transaction timeout");
       cases = cases + 1;
     end
   endtask
   task complete(input [31:0] expected);
     integer n, old_ar, old_aw, old_w, old_write;
     begin
-      if (!lsu_done || lsu_error || mem_rdata_r !== expected)
-        $fatal(1, "wrong result: got %h expected %h", mem_rdata_r, expected);
+      if (!rsp_valid || lsu_error || rsp_rdata !== expected)
+        $fatal(1, "wrong result: got %h expected %h", rsp_rdata, expected);
       old_ar = ar_count;
       old_aw = aw_count;
       old_w = w_count;
       old_write = write_count;
       for (n = 0; n < 8; n = n + 1) begin
         tick;
-        if (!lsu_done || mem_rdata_r !== expected || arvalid || awvalid || wvalid)
+        if (!rsp_valid || rsp_rdata !== expected || arvalid || awvalid || wvalid)
           $fatal(1, "DONE must hold result without issuing duplicate requests");
       end
       if (ar_count != old_ar || aw_count != old_aw || w_count != old_w || write_count != old_write)
         $fatal(1, "completed request repeated a transfer");
-      mem_valid = 0;
-      lsu_finish = 1;
+      req_valid = 0;
+      rsp_ready = 1;
       tick;
-      lsu_finish = 0;
-      if (lsu_done) $fatal(1, "completion acknowledgement did not release DONE");
+      rsp_ready = 0;
+      if (rsp_valid) $fatal(1, "completion acknowledgement did not release DONE");
     end
   endtask
   task check_fault(input [31:0] addr, input [1:0] resp, input bit is_write);
     integer n;
     begin
-      if (lsu_done || !lsu_error || lsu_error_addr !== addr ||
+      if (rsp_valid || !lsu_error || lsu_error_addr !== addr ||
           lsu_error_resp !== resp || lsu_error_write !== is_write)
         $fatal(1, "wrong fault metadata");
-      lsu_finish = 1;
+      rsp_ready = 1;
       for (n = 0; n < 10; n = n + 1) begin
         tick;
-        if (!lsu_error || lsu_done || arvalid || awvalid || wvalid || rready || bready)
+        if (!lsu_error || rsp_valid || arvalid || awvalid || wvalid || rready || bready)
           $fatal(1, "fault must stop traffic and remain sticky until reset");
       end
     end
@@ -300,7 +305,7 @@ module axi_lsu_tb #(parameter RANDOM_DELAY = 1);
     launch(0, BASE+67, 3, 0, 0);
     wait_result;
     check_fault(BASE+68, 2, 0);
-    if (mem_rdata_r !== 0) $fatal(1, "partial split load must not publish a result");
+    if (rsp_rdata !== 0) $fatal(1, "partial split load must not publish a result");
     reset;
     ram[512+3] = 8'h55; ram[512+4] = 8'h66; ram[512+5] = 8'h77; ram[512+6] = 8'h88;
     error_addr = BASE+516; write_error_resp = 2;
