@@ -119,6 +119,33 @@ make ARCH=riscv32e-npc run mainargs=test
 
 ## Differential testing
 
+NPC and the reference shared library must use the same register-copy ABI.
+`CONFIG_RVE=y` means 16 GPRs followed by PC (68 bytes); with RVE disabled,
+there are 32 GPRs followed by PC (132 bytes). The current `RV32E` welcome
+banner and `CONFIG_ISA` string do not determine this layout: check
+`CONFIG_RVE`. The reference's layout is fixed when its `.so` is built;
+changing NEMU's current `.config` does not update an existing library.
+A 32-GPR NPC paired with a 16-GPR reference sends x16 where the reference
+expects PC, commonly causing a fetch from zero on the first reference step.
+
+The existing `riscv32-ref_defconfig` enables RVE. For a 32-GPR NPC, use the
+separate preset and output directory instead (these commands change NEMU's
+active configuration; save and restore it if also using standalone NEMU):
+
+```sh
+make -C nemu riscv32i-ref_defconfig
+make -C nemu BUILD_DIR="$PWD/nemu/build/ref-rv32i"
+make -C npc menuconfig  # enable DIFFTEST; keep RVE disabled
+make -C npc sim IMG=/path/to/rv32i-image.bin \
+  DIFF="$PWD/nemu/build/ref-rv32i/riscv32-nemu-interpreter-so"
+```
+
+Set the NPC reference path to
+`../nemu/build/ref-rv32i/riscv32-nemu-interpreter-so` to use that library by
+default. Commands above assume the workspace root as the working directory.
+
+For a 16-GPR NPC (`CONFIG_RVE=y`), use the original reference preset:
+
 Build NEMU once with its reference configuration, then restore the desired NEMU
 configuration if NEMU is also used as a standalone DUT:
 
