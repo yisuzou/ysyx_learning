@@ -21,13 +21,29 @@ set config [read $cfg_fd]
 close $cfg_fd
 set rve [regexp -line {^CONFIG_RVE=y$} $config]
 set isa [expr {$rve ? "rv32e" : "rv32i"}]
+
+# Use menuconfig values or the same overrides used by the simulator.
+# Old .config files retain the original 16 x 4 B geometry.
+proc cache_setting {name fallback allowed config} {
+    set value $fallback
+    if {[regexp -line [format {^CONFIG_%s=([0-9]+)$} $name] $config -> saved]} {
+        set value $saved
+    }
+    if {[info exists ::env($name)]} { set value $::env($name) }
+    if {[lsearch -exact $allowed $value] < 0} {
+        error "$name must be one of: $allowed"
+    }
+    return $value
+}
+set cache_lines [cache_setting ICACHE_LINES 16 {1 2 4 8 16 32 64 128 256 512 1024 2048 4096} $config]
+set cache_bytes [cache_setting ICACHE_BLOCK_BYTES 4 {4 8 16 32 64 128 256} $config]
 # 显式定义 SYNTHESIS，让 `ifndef SYNTHESIS 内的 DPI-C 声明/调用被预处理排除。
 set defines [list -D SYNTHESIS]
 if {$rve} { lappend defines -D CONFIG_RVE }
 
 # 不把 MEM/UART/CLINT 当黑盒；完整读取所有可能实例化的模块。
 # rv_stability_check 只在 `ifndef SYNTHESIS` 下实例化且使用 $display，不加入综合。
-set rtl [list vsrc/top.v vsrc/npc_core.v vsrc/IFU.v vsrc/IDU.v vsrc/idu_stage.v \
+set rtl [list vsrc/top.v vsrc/npc_core.v vsrc/IFU.v vsrc/icache.v vsrc/IDU.v vsrc/idu_stage.v \
     vsrc/EXU.v vsrc/exu_stage.v vsrc/BranchUnit.v vsrc/LSU.v vsrc/WBU.v \
     vsrc/CSR.v vsrc/MEM.v vsrc/random_delay.v vsrc/AXIArbiter.v vsrc/XBAR.v \
     vsrc/UART.v vsrc/CLINT.v vsrc/gpr/$isa/GPR.v]
@@ -37,10 +53,11 @@ set rtl [list vsrc/top.v vsrc/npc_core.v vsrc/IFU.v vsrc/IDU.v vsrc/idu_stage.v 
 verilog_defaults -push
 verilog_defaults -clear
 read_verilog -sv -defer -ppdump {*}$defines {*}$rtl
-hierarchy -simcheck -top top -chparam PMEM_SIZE $mem_bytes -chparam RANDOM_DELAY 0
+hierarchy -simcheck -top top -chparam PMEM_SIZE $mem_bytes -chparam RANDOM_DELAY 0 \
+    -chparam ICACHE_LINES $cache_lines -chparam ICACHE_BLOCK_BYTES $cache_bytes
 verilog_defaults -pop
 
 # 此时可检查参数、完整实例树和 DPI 排除情况，但还不能读 Nangate45 单元面积。
 tee -o build/synth/hierarchy.txt stat
 write_rtlil build/synth/elaborated.il
-puts "NPC synthesis profile: ISA=$isa, PMEM_SIZE=$mem_bytes bytes, RANDOM_DELAY=0"
+puts "NPC synthesis profile: ISA=$isa, PMEM_SIZE=$mem_bytes bytes, RANDOM_DELAY=0, I-cache=$cache_lines x $cache_bytes B"
