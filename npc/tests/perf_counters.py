@@ -22,7 +22,9 @@ _start:
   lui t0, 0x40000
   jalr zero, 0(t0)
 #elif FAULT_CASE == 3
-  .word 0xffffffff
+  // MUL is unsupported by this RV32I/E core but can be disassembled when
+  // ITRACE is enabled, allowing the host's illegal-instruction path to run.
+  .word 0x02000033
 #elif FAULT_CASE == 4
   lui s0, 0x40000
   sw zero, 0(s0)
@@ -176,8 +178,10 @@ def run_case(args, name, *, split=0, fault=0):
                     f"{name}: {category} execution must be handoff plus LSU wait")
     if args.expect_no_delay:
         fetch_intervals = {(total - execute) / count for count, total, execute in classes.values()}
-        # WAIT_PC (1), AR accept (1), response (2).
-        require(fetch_intervals == {4}, f"{name}: no-delay RAM fetch must take four cycles")
+        # These straight-line programs never revisit a PC, so every fetch is
+        # a cold miss: cache PC accept/lookup/AR (3), RAM response (2), cache
+        # response to IFU (1), then IFU delivery to IDU (1).
+        require(fetch_intervals == {7}, f"{name}: no-delay cold fetch must take seven cycles")
         # Aligned load/store occupy 11/12 execution cycles (four handoff cycles
         # plus 7/8 LSU wait cycles). The split access adds one extra beat:
         # four read cycles or five write cycles on top of its aligned wait.

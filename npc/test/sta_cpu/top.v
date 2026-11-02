@@ -2,8 +2,16 @@
 // No MEM, UART, CLINT, or platform XBAR: the CPU's external AXI4-Lite master
 // becomes the top-level interface so the synthesis/STA result reflects only
 // the CPU (reg-to-reg) timing and area.
+`ifndef NPC_ICACHE_LINES
+`define NPC_ICACHE_LINES 16
+`endif
+`ifndef NPC_ICACHE_BLOCK_BYTES
+`define NPC_ICACHE_BLOCK_BYTES 4
+`endif
 module top #(
     parameter RANDOM_DELAY = 0,
+    parameter integer ICACHE_LINES = `NPC_ICACHE_LINES,
+    parameter integer ICACHE_BLOCK_BYTES = `NPC_ICACHE_BLOCK_BYTES,
     parameter [31:0] PMEM_BASE = 32'h80000000,
     parameter [31:0] PMEM_SIZE = 32'h08000000
 ) (
@@ -50,6 +58,8 @@ module top #(
 
   npc_core #(
       .RANDOM_DELAY(RANDOM_DELAY),
+      .ICACHE_LINES(ICACHE_LINES),
+      .ICACHE_BLOCK_BYTES(ICACHE_BLOCK_BYTES),
       .PMEM_BASE(PMEM_BASE),
       .PMEM_SIZE(PMEM_SIZE)
   ) u_cpu (

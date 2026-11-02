@@ -14,6 +14,27 @@
 关闭后，RTL 不生成性能事件或调用相应 DPI-C，C++ 不编译计数器实现，也不输出详细统计。
 基础指令数、总周期数和单行 IPC 摘要仍然输出。
 
+## I-cache 参数
+
+默认每块 4 B、16 块，数据容量为 64 B，保持直接映射、单请求在途。
+`make -C npc menuconfig` 的 `Memory` 菜单可设置 `ICACHE_LINES` 和
+`ICACHE_BLOCK_BYTES`；也可在构建和运行时显式指定：
+
+```sh
+make -C npc ICACHE_LINES=32 ICACHE_BLOCK_BYTES=16
+make -C npc sim ICACHE_LINES=32 ICACHE_BLOCK_BYTES=16 IMG=/path/to/image.bin
+```
+
+块数支持 1～4096，块大小支持 4～256 B，两者必须为 2 的幂。
+容量为两者乘积，tag、索引、块内字选择及回填计数宽度自动推导。
+改变命令行参数会触发重新构建；省略参数时使用 menuconfig 配置，
+旧配置文件缺少这两项时使用 16 块、4 B 的默认值。仿真和综合使用同一组参数。
+
+大于 4 B 的块使用多笔顺序 AXI4-Lite 读回填，收齐整块后才响应；任一字
+读错误都不安装新块，并向 IFU 返回首个错误。总线仍为 32 位，未增加突发、
+相联度或 FENCE.I 支持。默认单字块保留原来的回填时序。
+下文性能测试的 `--expect-no-delay` 精确周期检查针对默认 4 B 块。
+
 在仓库根目录、环境变量按 `AGENTS.md` 设置后运行：
 
 ```sh
@@ -86,7 +107,7 @@ CSV 的字段如下；除 `pending*` 外，都是累计值：
 | 字段 | 含义 |
 |---|---|
 | `cycle` | 复位后有效周期数 |
-| `ar_accept`, `fetched` | 取指 AR 握手、成功接收 R 响应 |
+| `ar_accept`, `fetched` | IFU 向 I-cache 发出取指请求、成功接收缓存响应；包含命中 |
 | `deliver` | IFU 向 IDU 的消息握手（`fi_valid && fi_ready`） |
 | `wait_pc`, `id_hold`, `ar_wait`, `r_wait`, `r_error`, `fault_hold` | 前端其余状态周期；与 `ar_accept`、`fetched`、`deliver` 一起构成前端分区 |
 | `backend_idle`, `execute` | 后端空闲周期、后端被占用周期（IDU/EXU/WBU 任一持有消息） |
@@ -216,9 +237,9 @@ C++ 先累积当前提交间隔，在提交时归入对应类别。异常或中�
 |---|---|
 | `wait_pc` | IFU 处于 WAIT_PC，等待 WBU 提交后交出下一 PC |
 | `id_hold` | `fi_valid && !fi_ready`，已取得指令但 IDU 未接收（当前结构下恒为 0，保留检查） |
-| `ar_wait` | `ifu_arvalid && !ifu_arready`，地址尚未被下游接受 |
-| `ar_accept` | AR 握手成功 |
-| `r_wait` | `ifu_rready && !ifu_rvalid`，正在期待响应 |
+| `ar_wait` | `ifu_arvalid && !ifu_arready`，取指地址尚未被 I-cache 接受 |
+| `ar_accept` | IFU 与 I-cache 的请求握手成功，包含命中和缺失 |
+| `r_wait` | `ifu_rready && !ifu_rvalid`，等待 I-cache 响应，包含查找及缺失回填时间 |
 | `fetched` | 成功接收 R 响应 |
 | `r_error` | 接收到了错误的 R 响应，未得到可执行指令 |
 | `fault_hold` | 取指故障保持；等待主机中止 |
@@ -226,7 +247,9 @@ C++ 先累积当前提交间隔，在提交时归入对应类别。异常或中�
 加上 `deliver` 后，九个状态互斥并覆盖全部活跃周期。`share_no_deliver` 的分母是
 所有无交付周期，`share_all` 的分母是所有活跃周期。这些是周期占比，不是每条
 指令遭遇某事件的概率。`wait_pc` 包含等待上一条指令提交并交出 PC 的时间，
-不是取指准备延迟；`ar_wait` 包含仲裁、译码和下游 READY，不能仅凭它就断言有主机争用。
+不是取指准备延迟。接入 I-cache 后，`ar_wait` 表示缓存尚未接收请求；
+缺失时的仲裁、译码及内存等待计入 `r_wait`。`ar_accept` 不等同于外部 AXI 读次数，
+不能直接用该计数推导缓存命中率。
 
 后端分区为 `backend_idle + execute = 活跃周期`，其中
 `execute = de_valid || exu_busy || retire_pending`。`wb_wait_pc`

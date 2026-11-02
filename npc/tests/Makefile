@@ -6,6 +6,9 @@ PYTHON ?= python3
 BUILD_DIR ?= /tmp/npc-axi-tests
 RTL_DIR := $(abspath ../vsrc)
 IVFLAGS := -g2012 -Wall -Wno-timescale
+ICACHE_CORE_RTL := $(addprefix $(RTL_DIR)/,npc_core.v IFU.v icache.v \
+    idu_stage.v IDU.v exu_stage.v EXU.v BranchUnit.v LSU.v WBU.v CSR.v \
+    random_delay.v AXIArbiter.v MEM.v gpr/rv32i/GPR.v)
 
 $(BUILD_DIR):
 	@mkdir -p $@
@@ -28,6 +31,13 @@ $(BUILD_DIR)/uart.vvp: axi_uart_tb.sv $(RTL_DIR)/UART.v | $(BUILD_DIR)
 $(BUILD_DIR)/ifu-backpressure.vvp: ifu_backpressure_tb.sv $(RTL_DIR)/IFU.v | $(BUILD_DIR)
 	$(IVERILOG) $(IVFLAGS) -s ifu_backpressure_tb -o $@ $^
 
+$(BUILD_DIR)/icache-core.vvp: icache_core_tb.sv $(ICACHE_CORE_RTL) | $(BUILD_DIR)
+	$(IVERILOG) $(IVFLAGS) -DSYNTHESIS -s icache_core_tb -o $@ $^
+
+$(BUILD_DIR)/icache-core-delay.vvp: icache_core_tb.sv $(ICACHE_CORE_RTL) | $(BUILD_DIR)
+	$(IVERILOG) $(IVFLAGS) -DSYNTHESIS -s icache_core_tb \
+		-Picache_core_tb.RANDOM_DELAY=1 -o $@ $^
+
 $(BUILD_DIR)/mem-no-delay: axi_mem_tb.cpp $(RTL_DIR)/MEM.v $(RTL_DIR)/random_delay.v | $(BUILD_DIR)
 	$(VERILATOR) --cc --exe --build --assert -Wall --top-module MEM \
 		-GRANDOM_DELAY=0 -GSIZE=1024 --Mdir $(BUILD_DIR)/mem-no-delay-obj \
@@ -43,7 +53,7 @@ $(BUILD_DIR)/mem-synthesis: axi_mem_tb.cpp $(RTL_DIR)/MEM.v $(RTL_DIR)/random_de
 		-GRANDOM_DELAY=0 -GSIZE=1024 --Mdir $(BUILD_DIR)/mem-synthesis-obj \
 		-CFLAGS "-std=c++17 -Wall -Werror -DTEST_RANDOM_DELAY=0 -DTEST_SYNTHESIS" -o $(abspath $@) $(abspath $^)
 
-test: $(BUILD_DIR)/uart.vvp $(BUILD_DIR)/lsu-delay.vvp $(BUILD_DIR)/lsu-no-delay.vvp $(BUILD_DIR)/arbiter.vvp $(BUILD_DIR)/xbar.vvp $(BUILD_DIR)/ifu-backpressure.vvp $(BUILD_DIR)/mem-no-delay $(BUILD_DIR)/mem-delay $(BUILD_DIR)/mem-synthesis
+test: $(BUILD_DIR)/uart.vvp $(BUILD_DIR)/lsu-delay.vvp $(BUILD_DIR)/lsu-no-delay.vvp $(BUILD_DIR)/arbiter.vvp $(BUILD_DIR)/xbar.vvp $(BUILD_DIR)/ifu-backpressure.vvp $(BUILD_DIR)/mem-no-delay $(BUILD_DIR)/mem-delay $(BUILD_DIR)/mem-synthesis icache-test
 	$(VVP) $(BUILD_DIR)/lsu-delay.vvp
 	$(VVP) $(BUILD_DIR)/lsu-no-delay.vvp
 	$(VVP) $(BUILD_DIR)/arbiter.vvp
@@ -69,4 +79,18 @@ perf-run-test:
 ifu-test: $(BUILD_DIR)/ifu-backpressure.vvp
 	$(VVP) $(BUILD_DIR)/ifu-backpressure.vvp
 
-.PHONY: test soc-test perf-test perf-trace-test perf-run-test ifu-test
+icache-test: $(BUILD_DIR)/icache-core.vvp $(BUILD_DIR)/icache-core-delay.vvp icache-param-test
+	$(VVP) $(BUILD_DIR)/icache-core.vvp
+	$(VVP) $(BUILD_DIR)/icache-core-delay.vvp
+
+icache-param-test: | $(BUILD_DIR)
+	@set -e; for geometry in 1:4 1:16 16:4 16:16 32:8 8:64 4:256; do \
+		cache_lines=$${geometry%:*}; cache_bytes=$${geometry#*:}; \
+		output=$(BUILD_DIR)/icache-param-$$cache_lines-$$cache_bytes.vvp; \
+		$(IVERILOG) $(IVFLAGS) -s icache_param_tb \
+			-Picache_param_tb.LINES=$$cache_lines -Picache_param_tb.BLOCK_BYTES=$$cache_bytes \
+			-o $$output icache_param_tb.sv $(RTL_DIR)/icache.v; \
+		$(VVP) $$output; \
+	done
+
+.PHONY: test soc-test perf-test perf-trace-test perf-run-test ifu-test icache-test icache-param-test
