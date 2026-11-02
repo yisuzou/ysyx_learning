@@ -25,6 +25,23 @@ config MSIZE
   hex "Physical memory size"
   default 0x8000000
 
+config ICACHE_LINES
+  int "I-cache line count"
+  range 1 4096
+  default 16
+  help
+    Number of lines in the direct-mapped instruction cache. Must be a power
+    of two. Data capacity is ICACHE_LINES * ICACHE_BLOCK_BYTES bytes.
+
+config ICACHE_BLOCK_BYTES
+  int "I-cache block size in bytes"
+  range 4 256
+  default 4
+  help
+    Must be a power of two, at least one 32-bit instruction. Blocks larger
+    than four bytes are refilled with sequential AXI4-Lite word reads.
+    The complete block is installed only if every read succeeds.
+
 endmenu
 
 menu "Testing and Debugging"
