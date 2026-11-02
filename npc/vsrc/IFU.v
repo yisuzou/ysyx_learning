@@ -1,5 +1,6 @@
 // Read-only 32-bit AXI4-Lite master, with one outstanding fetch.
-// IDLE completes the entire AR/R transaction; WAIT holds the executing inst.
+// Fetches a latched PC through SEND_AR/WAIT_R, then holds the instruction in
+// SEND_ID until IDU accepts it. WAIT_PC accepts the next PC message from WBU.
 // Memory/DPI access belongs to the slave (MEM), not to this master.
 // Future AXI4 IDs/bursts belong at this master boundary; none are used here.
 module IFU (
@@ -63,17 +64,17 @@ module IFU (
   localparam [1:0] RESP_OKAY = 2'b00;
   localparam [31:0] INST_NOP = 32'h00000013;
 
-  // Main/phase state    Action                       Transition
-  // IDLE/FETCH_DELAY    Delay request launch          delay_done -> FETCH_AR
-  //                    Latch PC on launch
-  // IDLE/FETCH_AR       Hold ARVALID and ARADDR        ar_fire -> FETCH_R
-  // IDLE/FETCH_R        Assert RREADY                 r_fire, OKAY -> WAIT
-  //                    Latch returned instruction    r_fire, error -> FETCH_FAULT
-  // IDLE/FETCH_FAULT    Hold sticky fault; no traffic  reset only
-  // WAIT               Hold inst and ifu_valid        !mem_valid || memfinish
-  //                    No AR/R activity               -> IDLE/FETCH_DELAY
+  // State    Action                                 Transition
+  // WAIT_PC  Assert pc_ready; latch pc_data          pc_fire -> SEND_AR
+  // SEND_AR  Hold ARVALID and the latched PC         ar_fire -> WAIT_R
+  // WAIT_R   Assert RREADY; latch instruction/fault  r_fire, OKAY -> SEND_ID
+  //                                                 r_fire, error -> FAULT
+  // SEND_ID  Hold out_valid, out_inst and out_pc     out_fire -> WAIT_PC
+  // FAULT    No traffic; preserve any latched fault  reset only
+  // An invalid state enters FAULT without setting ifu_error.
   // AW/W/B have no FSM: this master never writes or accepts write responses.
-  // Unlisted conditions hold state. Reset discards any pending fetch/inst.
+  // Unlisted conditions hold state. Reset sets inst_q to NOP, clears the fault,
+  // and seeds SEND_AR with PC 0x80000000; the first fetch needs no PC handshake.
   reg [2:0] state;
   reg [31:0] fetch_pc_q;
   reg [31:0] inst_q;
@@ -109,12 +110,7 @@ module IFU (
   wire unused_write_inputs = &{1'b0, m_axi_awready, m_axi_wready,
                                m_axi_bvalid, m_axi_bresp};
 
-  // Preserve the current execution contract: non-memory instructions execute
-  // in one WAIT cycle, whereas memory instructions wait for completion.
-  //wire execute_done = !mem_valid || memfinish;
-  //wire fetch_launch = fetch_delay_req && fetch_delay_done;
-
-  // State registers only.
+  // FSM state, fetched PC/instruction, and sticky fault registers.
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       state <= SEND_AR;
@@ -123,7 +119,6 @@ module IFU (
       ifu_error <= 1'b0;
       ifu_error_resp <= 2'b00;
     end else begin
-      //sate <= next_state;
       case (state)
         WAIT_PC : begin
           if (pc_fire) begin
@@ -152,7 +147,7 @@ module IFU (
         SEND_ID : begin
           if (out_fire) begin
             state <= WAIT_PC;
-            //inst_q <= INST_NOP; 不必要的寄存器开销
+            // Keep inst_q; out_valid is low after leaving SEND_ID.
           end
         end
         FAULT : begin
@@ -165,47 +160,4 @@ module IFU (
     end
   end
 
-  // Combinational next-state logic.
-  // always @(*) begin
-  //   next_state = state;
-  //   case (state)
-  //     WAIT_PC : begin
-  //       next_state = pc_fire ? SEND_AR : WAIT_PC;
-  //     end
-  //     SEND_AR : begin
-  //       next_state = ar_fire ? WAIT_R : SEND_AR;
-  //     end
-  //     wait_R : begin
-  //       if (r_fire) begin
-  //         next_state = (m_axi_rresp == RESP_OKAY) ? SEND_ID : FAULT;
-  //       end else begin
-  //         next_state = WAIT_R;
-  //       end
-  //     end
-  //
-  //   endcase
-  // end
-  //
-  // // Payload registers only. PC is sampled before ARVALID rises; neither live
-  // // PC nor slave RDATA can change an already issued request/executing inst.
-  // always @(posedge clk or negedge rst_n) begin
-  //   if (!rst_n) begin
-  //     m_axi_araddr <= 32'b0;
-  //     inst <= INST_NOP;
-  //     ifu_error <= 1'b0;
-  //     ifu_error_resp <= RESP_OKAY;
-  //   end else begin
-  //     if (fetch_launch) m_axi_araddr <= pc; //延迟完毕且处于IDLE状态时，发起新的AR请求，锁存PC地址
-  //     if (r_fire) begin
-  //       if (m_axi_rresp == RESP_OKAY) begin
-  //         inst <= m_axi_rdata;
-  //       end else begin
-  //         inst <= INST_NOP;
-  //         ifu_error <= 1'b1;
-  //         ifu_error_resp <= m_axi_rresp;
-  //       end
-  //     end
-  //     if ((state == WAIT) && execute_done) inst <= INST_NOP;
-  //   end
-  // end
 endmodule

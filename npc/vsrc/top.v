@@ -1,5 +1,7 @@
 module top #(
     parameter RANDOM_DELAY = 0,
+    parameter integer ICACHE_LINES = 16,
+    parameter integer ICACHE_BLOCK_BYTES = 4,
     parameter [31:0] PMEM_BASE = 32'h80000000,
     parameter [31:0] PMEM_SIZE = 32'h08000000,
     parameter HAS_SERIAL = 1,
@@ -55,6 +57,8 @@ module top #(
 
   npc_core #(
       .RANDOM_DELAY(RANDOM_DELAY),
+      .ICACHE_LINES(ICACHE_LINES),
+      .ICACHE_BLOCK_BYTES(ICACHE_BLOCK_BYTES),
       .PMEM_BASE(PMEM_BASE),
       .PMEM_SIZE(PMEM_SIZE)
   ) u_cpu (

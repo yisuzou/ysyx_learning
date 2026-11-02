@@ -7,6 +7,8 @@ import "DPI-C" function void npc_perf_event(input int unsigned event_mask);
 `endif
 module npc_core #(
     parameter RANDOM_DELAY = 0,
+    parameter integer ICACHE_LINES = 16,
+    parameter integer ICACHE_BLOCK_BYTES = 4,
     parameter [31:0] PMEM_BASE = 32'h80000000,
     parameter [31:0] PMEM_SIZE = 32'h08000000
 ) (
@@ -205,10 +207,10 @@ module npc_core #(
   assign debug_skip_ref = commit_valid && retire_skip_ref;
 
   // ===========================================================================
-  // AXI4-Lite internal master wires (IFU read-only, LSU read/write).
+  // IFU -> I-cache -> AXIArbiter; LSU remains a separate read/write master.
   // ===========================================================================
   wire [31:0] ifu_araddr;
-  wire [2:0]  ifu_arprot;
+  wire [2:0]  unused_ifu_arprot;
   wire        ifu_arvalid;
   wire        ifu_arready;
   wire [31:0] ifu_rdata;
@@ -222,6 +224,22 @@ module npc_core #(
   wire [3:0]  unused_ifu_wstrb;
   wire        unused_ifu_wvalid;
   wire        unused_ifu_bready;
+
+  wire [31:0] icache_araddr;
+  wire [2:0]  icache_arprot;
+  wire        icache_arvalid;
+  wire        icache_arready;
+  wire [31:0] icache_rdata;
+  wire [1:0]  icache_rresp;
+  wire        icache_rvalid;
+  wire        icache_rready;
+  wire [31:0] unused_icache_awaddr;
+  wire [2:0]  unused_icache_awprot;
+  wire        unused_icache_awvalid;
+  wire [31:0] unused_icache_wdata;
+  wire [3:0]  unused_icache_wstrb;
+  wire        unused_icache_wvalid;
+  wire        unused_icache_bready;
 
   wire [31:0] lsu_araddr;
   wire [2:0]  lsu_arprot;
@@ -261,7 +279,7 @@ module npc_core #(
       .ifu_error_resp(ifu_error_resp),
       .ifu_error_addr(ifu_error_addr),
       .m_axi_araddr(ifu_araddr),
-      .m_axi_arprot(ifu_arprot),
+      .m_axi_arprot(unused_ifu_arprot),
       .m_axi_arvalid(ifu_arvalid),
       .m_axi_arready(ifu_arready),
       .m_axi_rdata(ifu_rdata),
@@ -279,6 +297,43 @@ module npc_core #(
       .m_axi_bresp(2'b0),
       .m_axi_bvalid(1'b0),
       .m_axi_bready(unused_ifu_bready)
+  );
+
+  // IFU's read-only AR/R handshakes map to the cache's PC/instruction ports.
+  // Both modules use the fixed instruction attribute ARPROT=3'b101.
+  // Cache hits are answered locally; only misses reach the read arbiter.
+  icache #(
+      .LINE_COUNT(ICACHE_LINES),
+      .BLOCK_BYTES(ICACHE_BLOCK_BYTES)
+  ) icache1 (
+      .clk(clk),
+      .rst_n(rst_n),
+      .if_pc_valid(ifu_arvalid),
+      .if_pc_ready(ifu_arready),
+      .if_pc(ifu_araddr),
+      .if_inst(ifu_rdata),
+      .if_inst_resp(ifu_rresp),
+      .if_inst_valid(ifu_rvalid),
+      .if_inst_ready(ifu_rready),
+      .m_axi_araddr(icache_araddr),
+      .m_axi_arprot(icache_arprot),
+      .m_axi_arvalid(icache_arvalid),
+      .m_axi_arready(icache_arready),
+      .m_axi_rdata(icache_rdata),
+      .m_axi_rresp(icache_rresp),
+      .m_axi_rvalid(icache_rvalid),
+      .m_axi_rready(icache_rready),
+      .m_axi_awaddr(unused_icache_awaddr),
+      .m_axi_awprot(unused_icache_awprot),
+      .m_axi_awvalid(unused_icache_awvalid),
+      .m_axi_awready(1'b0),
+      .m_axi_wdata(unused_icache_wdata),
+      .m_axi_wstrb(unused_icache_wstrb),
+      .m_axi_wvalid(unused_icache_wvalid),
+      .m_axi_wready(1'b0),
+      .m_axi_bresp(2'b0),
+      .m_axi_bvalid(1'b0),
+      .m_axi_bready(unused_icache_bready)
   );
 
   // ===========================================================================
@@ -543,19 +598,19 @@ module npc_core #(
   );
 
   // ===========================================================================
-  // Read arbiter: IFU and LSU share the external read channel.
+  // Read arbiter: I-cache misses and LSU share the external read channel.
   // ===========================================================================
   AXIArbiter axi_arbiter1 (
       .clk(clk),
       .rst_n(rst_n),
-      .ifu_araddr(ifu_araddr),
-      .ifu_arprot(ifu_arprot),
-      .ifu_arvalid(ifu_arvalid),
-      .ifu_arready(ifu_arready),
-      .ifu_rdata(ifu_rdata),
-      .ifu_rresp(ifu_rresp),
-      .ifu_rvalid(ifu_rvalid),
-      .ifu_rready(ifu_rready),
+      .ifu_araddr(icache_araddr),
+      .ifu_arprot(icache_arprot),
+      .ifu_arvalid(icache_arvalid),
+      .ifu_arready(icache_arready),
+      .ifu_rdata(icache_rdata),
+      .ifu_rresp(icache_rresp),
+      .ifu_rvalid(icache_rvalid),
+      .ifu_rready(icache_rready),
       .lsu_araddr(lsu_araddr),
       .lsu_arprot(lsu_arprot),
       .lsu_arvalid(lsu_arvalid),
@@ -658,6 +713,8 @@ module npc_core #(
   // Simulation-only performance events, sampled once per active rising edge.
   // Instruction classification travels with the committed message, so it is
   // no longer recomputed from live decode outputs.
+  // IFU AR/R count logical cache requests/responses, including cache hits.
+  // The response wait includes cache lookup, arbitration and memory latency.
   wire perf_ifu_ar      = ifu_arvalid && ifu_arready;
   wire perf_ifu_fetch   = ifu_rvalid && ifu_rready && (ifu_rresp == 2'b00);
   wire perf_ifu_r_error = ifu_rready && ifu_rvalid && (ifu_rresp != 2'b00);
